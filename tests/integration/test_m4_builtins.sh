@@ -205,6 +205,33 @@ assert_contains "unalias not found error" "not found" "$OUT"
 OUT=$(printf "alias printenv='/bin/echo shadowed'\nprintenv\n" | $SHELL_BIN 2>&1)
 assert_contains "alias shadows builtin" "shadowed" "$OUT"
 
+# --- 4.9 type / which ---
+echo "--- 4.9 type / which ---"
+
+# type builtin
+OUT=$(echo "type cd" | $SHELL_BIN 2>&1)
+assert_contains "type builtin" "cd is a shell builtin" "$OUT"
+
+# type external
+OUT=$(echo "type ls" | $SHELL_BIN 2>&1)
+assert_contains "type external" "ls is /" "$OUT"
+
+# type alias
+OUT=$(printf "alias foo='bar'\ntype foo\n" | $SHELL_BIN 2>&1)
+assert_contains "type alias" "foo is aliased to 'bar'" "$OUT"
+
+# type not found
+OUT=$(echo "type nonexistent_cmd_xyz" | $SHELL_BIN 2>&1)
+assert_contains "type not found" "not found" "$OUT"
+
+# which external
+OUT=$(echo "which ls" | $SHELL_BIN 2>&1)
+assert_contains "which external path" "/ls" "$OUT"
+
+# which builtin
+OUT=$(echo "which cd" | $SHELL_BIN 2>&1)
+assert_contains "which builtin" "built-in" "$OUT"
+
 # --- Summary ---
 echo ""
 echo "test_m4_builtins"

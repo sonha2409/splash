@@ -329,6 +329,96 @@ static int builtin_source(SimpleCommand *cmd) {
     return last_status;
 }
 
+// Search $PATH for an executable. Returns allocated path or NULL.
+// Caller must free the returned string.
+static char *find_in_path(const char *name) {
+    // Absolute or relative path — check directly
+    if (strchr(name, '/')) {
+        if (access(name, X_OK) == 0) {
+            return xstrdup(name);
+        }
+        return NULL;
+    }
+
+    const char *path_env = getenv("PATH");
+    if (!path_env) {
+        return NULL;
+    }
+
+    char *path_copy = xstrdup(path_env);
+    char *saveptr = NULL;
+    char *dir = strtok_r(path_copy, ":", &saveptr);
+    while (dir) {
+        size_t len = strlen(dir) + 1 + strlen(name) + 1;
+        char *full = xmalloc(len);
+        snprintf(full, len, "%s/%s", dir, name);
+        if (access(full, X_OK) == 0) {
+            free(path_copy);
+            return full;
+        }
+        free(full);
+        dir = strtok_r(NULL, ":", &saveptr);
+    }
+    free(path_copy);
+    return NULL;
+}
+
+// type cmd [cmd ...]
+static int builtin_type(SimpleCommand *cmd) {
+    if (cmd->argc < 2) {
+        fprintf(stderr, "splash: type: usage: type name [name ...]\n");
+        return 1;
+    }
+    int ret = 0;
+    for (int i = 1; i < cmd->argc; i++) {
+        const char *name = cmd->argv[i];
+        const char *alias_val = alias_get(name);
+        if (alias_val) {
+            printf("%s is aliased to '%s'\n", name, alias_val);
+        } else if (builtin_is_builtin(name)) {
+            printf("%s is a shell builtin\n", name);
+        } else {
+            char *path = find_in_path(name);
+            if (path) {
+                printf("%s is %s\n", name, path);
+                free(path);
+            } else {
+                fprintf(stderr, "splash: type: %s: not found\n", name);
+                ret = 1;
+            }
+        }
+    }
+    return ret;
+}
+
+// which cmd [cmd ...]
+static int builtin_which(SimpleCommand *cmd) {
+    if (cmd->argc < 2) {
+        fprintf(stderr, "splash: which: usage: which name [name ...]\n");
+        return 1;
+    }
+    int ret = 0;
+    for (int i = 1; i < cmd->argc; i++) {
+        const char *name = cmd->argv[i];
+        const char *alias_val = alias_get(name);
+        if (alias_val) {
+            printf("%s: aliased to %s\n", name, alias_val);
+        } else if (builtin_is_builtin(name)) {
+            printf("%s: shell built-in command\n", name);
+        } else {
+            char *path = find_in_path(name);
+            if (path) {
+                printf("%s\n", path);
+                free(path);
+            } else {
+                fprintf(stderr, "%s not found\n", name);
+                ret = 1;
+            }
+        }
+    }
+    return ret;
+}
+
 // alias [name[='value']]
 static int builtin_alias(SimpleCommand *cmd) {
     if (cmd->argc < 2) {
@@ -400,7 +490,9 @@ int builtin_is_builtin(const char *name) {
            strcmp(name, "export") == 0 ||
            strcmp(name, "source") == 0 ||
            strcmp(name, "alias") == 0 ||
-           strcmp(name, "unalias") == 0;
+           strcmp(name, "unalias") == 0 ||
+           strcmp(name, "type") == 0 ||
+           strcmp(name, "which") == 0;
 }
 
 int builtin_execute(SimpleCommand *cmd) {
@@ -418,6 +510,8 @@ int builtin_execute(SimpleCommand *cmd) {
     if (strcmp(name, "source") == 0)   return builtin_source(cmd);
     if (strcmp(name, "alias") == 0)    return builtin_alias(cmd);
     if (strcmp(name, "unalias") == 0)  return builtin_unalias(cmd);
+    if (strcmp(name, "type") == 0)     return builtin_type(cmd);
+    if (strcmp(name, "which") == 0)    return builtin_which(cmd);
 
     fprintf(stderr, "splash: %s: unknown builtin\n", name);
     return 1;

@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 4 — Builtins and Environment
-**Last completed feature**: 4.7 source
+**Last completed feature**: 4.9 type/which
 
 ---
 
@@ -163,8 +163,8 @@ splash/
 | 4.5 | `unsetenv VAR` | `unsetenv()` call. | `DONE` | 2026-03-17 | |
 | 4.6 | `export VAR=VALUE` | Like `setenv` but POSIX-style syntax. | `DONE` | 2026-03-17 | No-arg lists all, multi-arg supported |
 | 4.7 | `source <file>` | Read file line by line, feed each line to parser/executor as if typed. | `DONE` | 2026-03-17 | Recursion guard at depth 16 |
-| 4.8 | `alias` / `unalias` | Store aliases, expand before execution. Syntax: `alias name='command'`. | `TODO` | | |
-| 4.9 | `type` / `which` | Print whether cmd is builtin, alias, or external (and its PATH). | `TODO` | | |
+| 4.8 | `alias` / `unalias` | Store aliases, expand before execution. Syntax: `alias name='command'`. | `DONE` | 2026-03-17 | String-level expansion, depth limit 16 |
+| 4.9 | `type` / `which` | Print whether cmd is builtin, alias, or external (and its PATH). | `DONE` | 2026-03-17 | Checks alias → builtin → PATH |
 | 4.10 | `history` | Print command history with line numbers. | `TODO` | | |
 | 4.11 | Auto-source config | Source `~/.config/splash/init.sh` then `~/.shellrc` on startup if they exist. | `TODO` | | |
 
