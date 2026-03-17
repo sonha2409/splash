@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -104,4 +105,219 @@ char *expand_tilde(const char *word) {
     memcpy(result + hlen, rest, rlen);
     result[hlen + rlen] = '\0';
     return result;
+}
+
+
+int expand_has_glob(const char *word) {
+    if (!word) {
+        return 0;
+    }
+    for (const char *p = word; *p; p++) {
+        if (*p == GLOB_STAR || *p == GLOB_QUEST) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void expand_glob_unescape(char *word) {
+    if (!word) {
+        return;
+    }
+    for (char *p = word; *p; p++) {
+        if (*p == GLOB_STAR) {
+            *p = '*';
+        } else if (*p == GLOB_QUEST) {
+            *p = '?';
+        }
+    }
+}
+
+// Match a pattern (with GLOB_STAR/GLOB_QUEST sentinels) against a string.
+// Returns 1 on match, 0 on mismatch.
+static int glob_match(const char *pattern, const char *str) {
+    const char *p = pattern;
+    const char *s = str;
+    const char *star_p = NULL;
+    const char *star_s = NULL;
+
+    while (*s) {
+        if (*p == GLOB_QUEST) {
+            // Match any single character
+            p++;
+            s++;
+        } else if (*p == GLOB_STAR) {
+            // Record star position and try matching zero characters
+            star_p = p;
+            star_s = s;
+            p++;
+        } else if (*p == *s) {
+            p++;
+            s++;
+        } else if (star_p) {
+            // Backtrack: star matches one more character
+            p = star_p + 1;
+            star_s++;
+            s = star_s;
+        } else {
+            return 0;
+        }
+    }
+
+    // Skip trailing stars
+    while (*p == GLOB_STAR) {
+        p++;
+    }
+
+    return *p == '\0';
+}
+
+// Compare function for qsort of strings.
+static int str_compare(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
+}
+
+char **expand_glob(const char *pattern, int *count) {
+    *count = 0;
+
+    if (!pattern || !expand_has_glob(pattern)) {
+        return NULL;
+    }
+
+    // Split pattern into directory and filename parts at last /
+    const char *last_slash = NULL;
+    for (const char *p = pattern; *p; p++) {
+        if (*p == '/') {
+            last_slash = p;
+        }
+    }
+
+    char *dir_path = NULL;
+    const char *file_pattern = NULL;
+
+    if (last_slash) {
+        size_t dir_len = (size_t)(last_slash - pattern);
+        dir_path = xmalloc(dir_len + 1);
+        memcpy(dir_path, pattern, dir_len);
+        dir_path[dir_len] = '\0';
+        // Unescape the directory part (globs in dir not supported yet)
+        expand_glob_unescape(dir_path);
+        file_pattern = last_slash + 1;
+    } else {
+        dir_path = xstrdup(".");
+        file_pattern = pattern;
+    }
+
+    DIR *d = opendir(dir_path);
+    if (!d) {
+        free(dir_path);
+        return NULL;
+    }
+
+    // Collect matches
+    int capacity = 16;
+    char **results = xmalloc(sizeof(char *) * (size_t)capacity);
+
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        const char *name = entry->d_name;
+
+        // Skip hidden files unless pattern starts with '.'
+        if (name[0] == '.' && file_pattern[0] != '.') {
+            continue;
+        }
+
+        if (glob_match(file_pattern, name)) {
+            if (*count >= capacity) {
+                capacity *= 2;
+                results = xrealloc(results,
+                                   sizeof(char *) * (size_t)capacity);
+            }
+
+            // Build full path if pattern had a directory component
+            if (last_slash) {
+                size_t dlen = strlen(dir_path);
+                size_t nlen = strlen(name);
+                char *full = xmalloc(dlen + 1 + nlen + 1);
+                memcpy(full, dir_path, dlen);
+                full[dlen] = '/';
+                memcpy(full + dlen + 1, name, nlen);
+                full[dlen + 1 + nlen] = '\0';
+                results[*count] = full;
+            } else {
+                results[*count] = xstrdup(name);
+            }
+            (*count)++;
+        }
+    }
+
+    closedir(d);
+    free(dir_path);
+
+    if (*count == 0) {
+        free(results);
+        return NULL;
+    }
+
+    // Sort results alphabetically
+    qsort(results, (size_t)*count, sizeof(char *), str_compare);
+
+    return results;
+}
+
+void expand_glob_argv(SimpleCommand *cmd) {
+    if (!cmd || cmd->argc == 0) {
+        return;
+    }
+
+    // Build a new argv by expanding each arg
+    int new_capacity = cmd->argc * 2;
+    char **new_argv = xmalloc(sizeof(char *) * (size_t)(new_capacity + 1));
+    int new_argc = 0;
+
+    for (int i = 0; i < cmd->argc; i++) {
+        if (expand_has_glob(cmd->argv[i])) {
+            int match_count = 0;
+            char **matches = expand_glob(cmd->argv[i], &match_count);
+            if (matches) {
+                // Ensure capacity
+                while (new_argc + match_count >= new_capacity) {
+                    new_capacity *= 2;
+                    new_argv = xrealloc(new_argv,
+                                        sizeof(char *) * (size_t)(new_capacity + 1));
+                }
+                for (int j = 0; j < match_count; j++) {
+                    new_argv[new_argc++] = matches[j]; // transfer ownership
+                }
+                free(matches); // free array, not strings
+                free(cmd->argv[i]); // free original glob pattern
+            } else {
+                // No matches — unescape and keep literal
+                expand_glob_unescape(cmd->argv[i]);
+                if (new_argc >= new_capacity) {
+                    new_capacity *= 2;
+                    new_argv = xrealloc(new_argv,
+                                        sizeof(char *) * (size_t)(new_capacity + 1));
+                }
+                new_argv[new_argc++] = cmd->argv[i]; // keep original
+            }
+        } else {
+            // No glob chars — unescape any sentinels (shouldn't have any, but safe)
+            expand_glob_unescape(cmd->argv[i]);
+            if (new_argc >= new_capacity) {
+                new_capacity *= 2;
+                new_argv = xrealloc(new_argv,
+                                    sizeof(char *) * (size_t)(new_capacity + 1));
+            }
+            new_argv[new_argc++] = cmd->argv[i]; // keep original
+        }
+    }
+
+    new_argv[new_argc] = NULL;
+
+    // Replace command's argv
+    free(cmd->argv); // free old array (strings were either transferred or freed)
+    cmd->argv = new_argv;
+    cmd->argc = new_argc;
+    cmd->argv_capacity = new_capacity + 1;
 }

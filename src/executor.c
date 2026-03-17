@@ -354,6 +354,11 @@ int executor_execute_line(const char *line) {
     Pipeline *pl = parser_parse(tokens);
     int status = 0;
     if (pl) {
+        // Expand globs in all commands
+        for (int ci = 0; ci < pl->num_commands; ci++) {
+            expand_glob_argv(pl->commands[ci]);
+        }
+
         // Track $_ (last argument of the command)
         if (pl->num_commands > 0) {
             SimpleCommand *last_cmd = pl->commands[pl->num_commands - 1];

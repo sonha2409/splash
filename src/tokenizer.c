@@ -9,6 +9,11 @@
 #define INITIAL_CAPACITY 16
 #define INITIAL_WORD_CAPACITY 64
 
+// Sentinel bytes used to mark unquoted glob characters.
+// These are replaced back to literals if no glob match occurs.
+#define GLOB_STAR  '\x01'
+#define GLOB_QUEST '\x02'
+
 
 static TokenList *token_list_new(void) {
     TokenList *list = xmalloc(sizeof(TokenList));
@@ -282,6 +287,18 @@ static int read_word(const char *input, int start, char **out_value) {
                 return -1;
             }
             i++; // skip closing quote
+            continue;
+        }
+
+        // Unquoted glob characters — mark with sentinels
+        if (c == '*') {
+            buf_append_char(&buf, &buf_len, &capacity, GLOB_STAR);
+            i++;
+            continue;
+        }
+        if (c == '?') {
+            buf_append_char(&buf, &buf_len, &capacity, GLOB_QUEST);
+            i++;
             continue;
         }
 

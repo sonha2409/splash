@@ -45,11 +45,43 @@ Only at word start in unquoted context:
 - `~user` → user's home directory (via `getpwnam()`)
 - Does NOT expand inside any quotes
 
+## Wildcarding / Glob Expansion (5.7)
+
+Expands unquoted `*` and `?` in command arguments to matching filenames.
+
+### Sentinel Byte Approach
+
+The key challenge is distinguishing unquoted `*` from quoted `"*"` after tokenization. The solution uses sentinel bytes:
+
+1. **Tokenizer** (`read_word()`): When `*` or `?` appears in unquoted context, it's stored as `\x01` or `\x02` (sentinel bytes) in the token value. Inside quotes, they remain literal characters.
+2. **Executor** (`executor_execute_line()`): After parsing, calls `expand_glob_argv()` on each command. This scans argv for sentinels, performs glob expansion, and replaces the single arg with sorted matches.
+3. **No match**: If a glob pattern matches nothing, sentinels are unescaped back to literal `*`/`?` and the word is kept as-is (standard shell behavior).
+
+### Pattern Matching
+
+- `*` — matches zero or more characters (any sequence)
+- `?` — matches exactly one character
+- Path support: `src/*.c` splits on last `/`, opens that directory, matches filenames
+- Hidden files (`.` prefix) are excluded unless the pattern explicitly starts with `.`
+- Results are sorted alphabetically
+
+### What Doesn't Expand
+
+- `"*.c"` — double-quoted glob characters remain literal
+- `'*.c'` — single-quoted glob characters remain literal
+- `\*` — backslash-escaped glob characters remain literal
+
 ## Architecture
 
-The expansion is integrated into `tokenizer.c`'s `read_word()` rather than being a separate pass. This is because the tokenizer already tracks quoting context (single-quoted, double-quoted, unquoted), which determines whether expansion should happen. Helper functions in `expand.c` do the actual lookups.
+The expansion pipeline is split across two phases:
+
+1. **Tokenizer phase** (`tokenizer.c`): Handles quoting context, variable expansion, tilde expansion, and marks unquoted glob chars with sentinels. This is integrated into `read_word()` because it needs quoting context.
+2. **Executor phase** (`executor.c`→`expand.c`): Performs glob expansion on parsed argv arrays. This must happen after parsing because glob expansion can produce multiple arguments from a single token.
+
+Helper functions in `expand.c` do the actual lookups and filesystem operations.
 
 ## Testing
 
-- **Integration tests** in `tests/integration/test_m5_quoting_expansion.sh` — 22 tests
-- Covers: double/single quote behavior, backslash escapes, `$VAR`/`${VAR}` expansion, special variables `$?`/`$$`, tilde expansion, quoting suppression of expansion
+- **Unit tests** in `tests/test_expand.c` — 70 tests covering `expand_has_glob()`, `expand_glob_unescape()`, `expand_glob()` with star, question mark, hidden files, no-match, path patterns
+- **Integration tests** in `tests/integration/test_m5_quoting_expansion.sh` — 22 tests for quoting/variables/tilde
+- **Integration tests** in `tests/integration/test_m5_wildcarding.sh` — 11 tests for glob expansion, hidden file exclusion, quoted literal preservation, no-match fallback

@@ -24,4 +24,28 @@ const char *expand_variable(const char *name);
 // Returns NULL if expansion fails (caller should use original).
 char *expand_tilde(const char *word);
 
+// Sentinel bytes for unquoted glob characters (set by tokenizer).
+#define GLOB_STAR  '\x01'
+#define GLOB_QUEST '\x02'
+
+// Check if a word contains glob sentinel bytes.
+int expand_has_glob(const char *word);
+
+// Expand a glob pattern (containing sentinel bytes) into matching filenames.
+// Returns a newly allocated NULL-terminated array of strings, and sets *count.
+// If no matches, returns NULL (caller should use the literal word).
+// Caller must free each string and the array itself.
+char **expand_glob(const char *pattern, int *count);
+
+// Replace glob sentinel bytes back to their literal characters.
+// Modifies the string in place.
+void expand_glob_unescape(char *word);
+
+#include "command.h"
+
+// Expand globs in a command's argv. Replaces each arg that contains glob
+// sentinels with the matching filenames. If no matches, unescapes the sentinels
+// back to literal characters. Also unescapes non-glob args.
+void expand_glob_argv(SimpleCommand *cmd);
+
 #endif // SPLASH_EXPAND_H
