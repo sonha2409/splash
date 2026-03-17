@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 1 — Core Foundation
-**Last completed feature**: 1.1 Project scaffolding
+**Last completed feature**: 1.2 Tokenizer
 
 ---
 
@@ -99,7 +99,7 @@ splash/
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
 | 1.1 | Project scaffolding | Makefile, `src/` directory, `main.c` with basic loop | `DONE` | 2026-03-17 | ASan+UBSan only (no leak sanitizer on macOS ARM) |
-| 1.2 | Tokenizer | Hand-rolled lexer → token array. Handles: words, whitespace, operators (`\|`, `>`, `<`, `>>`, `&`, `;`, `&&`, `\|\|`, `\|>`). Supports incremental mode (`TOKEN_INCOMPLETE`). | `TODO` | | |
+| 1.2 | Tokenizer | Hand-rolled lexer → token array. Handles: words, whitespace, operators (`\|`, `>`, `<`, `>>`, `&`, `;`, `&&`, `\|\|`, `\|>`). Supports incremental mode (`TOKEN_INCOMPLETE`). | `DONE` | 2026-03-17 | 23 token types, 85 test assertions |
 | 1.3 | Parser | Recursive descent → `Command` structs. Grammar: `pipeline = command (PIPE command)*; command = WORD+`. Handles incomplete input gracefully. | `TODO` | | |
 | 1.4 | Command data structures | `SimpleCommand` (argv list), `Command` (list of `SimpleCommand`s + redirections + background flag) | `TODO` | | |
 | 1.5 | Executor | `fork()` + `execvp()` for single simple commands. Parent waits with `waitpid()`. | `TODO` | | |
@@ -305,7 +305,7 @@ splash/
 
 | Milestone | Total | Done | Status |
 |-----------|-------|------|--------|
-| 1. Core Foundation | 6 | 1 | In progress |
+| 1. Core Foundation | 6 | 2 | In progress |
 | 2. I/O & Pipes | 9 | 0 | Not started |
 | 3. Signals & Jobs | 10 | 0 | Not started |
 | 4. Builtins & Env | 11 | 0 | Not started |
