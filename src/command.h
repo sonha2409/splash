@@ -25,12 +25,20 @@ typedef struct {
     int redirect_capacity;
 } SimpleCommand;
 
+// Type of pipe connecting two pipeline stages.
+typedef enum {
+    PIPE_TEXT,        // |  — traditional text pipe
+    PIPE_STRUCTURED   // |> — structured data pipe
+} PipeType;
+
 // A pipeline of one or more commands connected by pipes.
 typedef struct {
     SimpleCommand **commands;  // Array of pointers to commands (owned)
     int num_commands;
     int cmd_capacity;
     int background;            // Non-zero if terminated with &
+    PipeType *pipe_types;      // Array of (num_commands - 1) pipe types (owned)
+    int pipe_capacity;
 } Pipeline;
 
 // Creates a new empty SimpleCommand. Caller takes ownership.
@@ -51,6 +59,10 @@ Pipeline *pipeline_new(void);
 
 // Append a command to the pipeline. Ownership of cmd is transferred to pipeline.
 void pipeline_add_command(Pipeline *pl, SimpleCommand *cmd);
+
+// Record the pipe type between the last two commands added.
+// Must be called after pipeline_add_command for the second command.
+void pipeline_add_pipe_type(Pipeline *pl, PipeType type);
 
 // Free a Pipeline and all its commands.
 void pipeline_free(Pipeline *pl);

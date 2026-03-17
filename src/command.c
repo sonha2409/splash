@@ -65,6 +65,8 @@ Pipeline *pipeline_new(void) {
     pl->commands = xmalloc(sizeof(SimpleCommand *) * (size_t)pl->cmd_capacity);
     pl->num_commands = 0;
     pl->background = 0;
+    pl->pipe_capacity = INITIAL_PIPELINE_CAPACITY;
+    pl->pipe_types = xmalloc(sizeof(PipeType) * (size_t)pl->pipe_capacity);
     return pl;
 }
 
@@ -77,6 +79,19 @@ void pipeline_add_command(Pipeline *pl, SimpleCommand *cmd) {
     pl->commands[pl->num_commands++] = cmd;
 }
 
+void pipeline_add_pipe_type(Pipeline *pl, PipeType type) {
+    int idx = pl->num_commands - 2; // pipe between cmd[n-2] and cmd[n-1]
+    if (idx < 0) {
+        return;
+    }
+    if (idx >= pl->pipe_capacity) {
+        pl->pipe_capacity *= 2;
+        pl->pipe_types = xrealloc(pl->pipe_types,
+                                   sizeof(PipeType) * (size_t)pl->pipe_capacity);
+    }
+    pl->pipe_types[idx] = type;
+}
+
 void pipeline_free(Pipeline *pl) {
     if (!pl) {
         return;
@@ -85,5 +100,6 @@ void pipeline_free(Pipeline *pl) {
         simple_command_free(pl->commands[i]);
     }
     free(pl->commands);
+    free(pl->pipe_types);
     free(pl);
 }

@@ -252,6 +252,69 @@ static void test_parser_absolute_path_command(void) {
     token_list_free(tokens);
 }
 
+// --- Structured pipe |> tests ---
+
+static void test_parser_structured_pipe_basic(void) {
+    TokenList *tokens = tokenizer_tokenize("ls |> where size > 100");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->num_commands, 2);
+    ASSERT_STR_EQ(pl->commands[0]->argv[0], "ls");
+    ASSERT_STR_EQ(pl->commands[1]->argv[0], "where");
+    ASSERT_INT_EQ(pl->pipe_types[0], PIPE_STRUCTURED);
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_text_pipe_type(void) {
+    TokenList *tokens = tokenizer_tokenize("ls | grep foo");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->num_commands, 2);
+    ASSERT_INT_EQ(pl->pipe_types[0], PIPE_TEXT);
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_mixed_pipes(void) {
+    TokenList *tokens = tokenizer_tokenize("ls | grep c |> sort name");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->num_commands, 3);
+    ASSERT_INT_EQ(pl->pipe_types[0], PIPE_TEXT);
+    ASSERT_INT_EQ(pl->pipe_types[1], PIPE_STRUCTURED);
+    ASSERT_STR_EQ(pl->commands[0]->argv[0], "ls");
+    ASSERT_STR_EQ(pl->commands[1]->argv[0], "grep");
+    ASSERT_STR_EQ(pl->commands[2]->argv[0], "sort");
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_structured_pipe_chain(void) {
+    TokenList *tokens = tokenizer_tokenize("ls |> where type == file |> sort size");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->num_commands, 3);
+    ASSERT_INT_EQ(pl->pipe_types[0], PIPE_STRUCTURED);
+    ASSERT_INT_EQ(pl->pipe_types[1], PIPE_STRUCTURED);
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_structured_pipe_error_no_cmd(void) {
+    TokenList *tokens = tokenizer_tokenize("ls |>");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NULL(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_structured_pipe_at_start(void) {
+    TokenList *tokens = tokenizer_tokenize("|> sort");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NULL(pl);
+    token_list_free(tokens);
+}
+
 int main(void) {
     printf("test_parser\n");
 
@@ -279,6 +342,14 @@ int main(void) {
     test_parser_redirect_with_pipe();
     test_parser_redirect_only_no_command();
     test_parser_absolute_path_command();
+
+    // Structured pipe |>
+    test_parser_structured_pipe_basic();
+    test_parser_text_pipe_type();
+    test_parser_mixed_pipes();
+    test_parser_structured_pipe_chain();
+    test_parser_structured_pipe_error_no_cmd();
+    test_parser_structured_pipe_at_start();
 
     TEST_REPORT();
 }

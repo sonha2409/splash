@@ -125,16 +125,21 @@ Pipeline *parser_parse(const TokenList *tokens) {
     pipeline_add_command(pl, cmd);
 
     // Parse remaining pipeline stages: (PIPE command)*
-    while (peek(&p)->type == TOKEN_PIPE) {
-        advance(&p); // consume pipe
+    while (peek(&p)->type == TOKEN_PIPE ||
+           peek(&p)->type == TOKEN_PIPE_STRUCTURED) {
+        Token *pipe_tok = advance(&p); // consume pipe
+        PipeType ptype = (pipe_tok->type == TOKEN_PIPE_STRUCTURED)
+                         ? PIPE_STRUCTURED : PIPE_TEXT;
 
         cmd = parse_simple_command(&p);
         if (!cmd) {
-            fprintf(stderr, "splash: syntax error: expected command after '|'\n");
+            fprintf(stderr, "splash: syntax error: expected command after '%s'\n",
+                    pipe_tok->value);
             pipeline_free(pl);
             return NULL;
         }
         pipeline_add_command(pl, cmd);
+        pipeline_add_pipe_type(pl, ptype);
     }
 
     // Check for background
