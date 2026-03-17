@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "expand.h"
 #include "tokenizer.h"
 #include "util.h"
 
@@ -48,7 +49,104 @@ static int is_special(char c) {
            c == '\n';
 }
 
-// Read a word token, handling quoting and escapes.
+// Append a string to the word buffer, growing if needed.
+static void buf_append_str(char **buf, int *buf_len, int *capacity,
+                           const char *str) {
+    int slen = (int)strlen(str);
+    while (*buf_len + slen + 1 >= *capacity) {
+        *capacity *= 2;
+        *buf = xrealloc(*buf, (size_t)*capacity);
+    }
+    memcpy(*buf + *buf_len, str, (size_t)slen);
+    *buf_len += slen;
+}
+
+// Append a single character to the word buffer, growing if needed.
+static void buf_append_char(char **buf, int *buf_len, int *capacity, char c) {
+    if (*buf_len + 1 >= *capacity) {
+        *capacity *= 2;
+        *buf = xrealloc(*buf, (size_t)*capacity);
+    }
+    (*buf)[(*buf_len)++] = c;
+}
+
+// Read a variable name after '$'. Handles ${VAR} and $VAR forms.
+// Returns the number of characters consumed (not including the '$').
+// Sets *out_value to the expanded value (may be empty string).
+static int read_and_expand_var(const char *input, int pos,
+                               char **buf, int *buf_len, int *capacity) {
+    int i = pos;
+
+    if (input[i] == '{') {
+        // ${VAR} form
+        i++; // skip {
+        int name_start = i;
+        while (input[i] != '\0' && input[i] != '}') {
+            i++;
+        }
+        if (input[i] == '\0') {
+            // Unterminated ${
+            buf_append_char(buf, buf_len, capacity, '$');
+            buf_append_char(buf, buf_len, capacity, '{');
+            return 1; // just consumed the {
+        }
+        int name_len = i - name_start;
+        char name[256];
+        if (name_len > 0 && name_len < (int)sizeof(name)) {
+            memcpy(name, input + name_start, (size_t)name_len);
+            name[name_len] = '\0';
+            const char *val = expand_variable(name);
+            if (val) {
+                buf_append_str(buf, buf_len, capacity, val);
+            }
+        }
+        i++; // skip }
+        return i - pos;
+    }
+
+    // $VAR form — variable name is alphanumeric + underscore
+    // Also handle single-char specials: $?, $$, $!, $_
+    if (input[i] == '?' || input[i] == '$' || input[i] == '!' ||
+        input[i] == '_') {
+        // Check if it's $_ followed by alphanumeric (then it's a var name)
+        if (input[i] == '_' && (isalnum((unsigned char)input[i + 1]) ||
+                                input[i + 1] == '_')) {
+            // Fall through to regular var name reading
+        } else {
+            char name[2] = {input[i], '\0'};
+            const char *val = expand_variable(name);
+            if (val) {
+                buf_append_str(buf, buf_len, capacity, val);
+            }
+            return 1;
+        }
+    }
+
+    // Regular variable name: [a-zA-Z_][a-zA-Z0-9_]*
+    if (isalpha((unsigned char)input[i]) || input[i] == '_') {
+        int name_start = i;
+        while (isalnum((unsigned char)input[i]) || input[i] == '_') {
+            i++;
+        }
+        int name_len = i - name_start;
+        char name[256];
+        if (name_len < (int)sizeof(name)) {
+            memcpy(name, input + name_start, (size_t)name_len);
+            name[name_len] = '\0';
+            const char *val = expand_variable(name);
+            if (val) {
+                buf_append_str(buf, buf_len, capacity, val);
+            }
+        }
+        return i - pos;
+    }
+
+    // Not a valid variable — treat $ as literal
+    buf_append_char(buf, buf_len, capacity, '$');
+    return 0;
+}
+
+// Read a word token, handling quoting, escapes, and expansions.
 // Returns the number of characters consumed from input, or -1 for incomplete.
 static int read_word(const char *input, int start, char **out_value) {
     int capacity = INITIAL_WORD_CAPACITY;
@@ -56,15 +154,38 @@ static int read_word(const char *input, int start, char **out_value) {
     int buf_len = 0;
     int i = start;
 
+    // Tilde expansion at word start (unquoted only)
+    if (input[i] == '~') {
+        // Find the end of the tilde prefix (up to first / or word boundary)
+        int j = i + 1;
+        while (input[j] != '\0' && input[j] != '/' &&
+               !isspace((unsigned char)input[j]) && !is_special(input[j])) {
+            j++;
+        }
+        // Include the / if present for expand_tilde
+        int end = j;
+        // Build the tilde word to expand
+        int tilde_len = end - i;
+        char tilde_word[256];
+        if (tilde_len < (int)sizeof(tilde_word)) {
+            memcpy(tilde_word, input + i, (size_t)tilde_len);
+            tilde_word[tilde_len] = '\0';
+            char *expanded = expand_tilde(tilde_word);
+            if (expanded) {
+                buf_append_str(&buf, &buf_len, &capacity, expanded);
+                free(expanded);
+                i = end;
+                // Continue reading the rest of the word
+            }
+            // If expansion fails, fall through to normal character handling
+        }
+    }
+
     while (input[i] != '\0') {
         char c = input[i];
 
         // Unquoted context: stop at whitespace or special characters
         if (isspace((unsigned char)c) || is_special(c)) {
-            // But check for $( which starts a word continuation
-            if (c == '$' && input[i + 1] == '(') {
-                break;
-            }
             break;
         }
 
@@ -73,21 +194,30 @@ static int read_word(const char *input, int start, char **out_value) {
             break;
         }
 
+        // Variable expansion in unquoted context
+        if (c == '$') {
+            i++; // skip $
+            int consumed = read_and_expand_var(input, i,
+                                               &buf, &buf_len, &capacity);
+            i += consumed;
+            continue;
+        }
+
         // Backslash escape
         if (c == '\\') {
             if (input[i + 1] == '\0') {
-                // Trailing backslash — incomplete
                 free(buf);
                 *out_value = NULL;
                 return -1;
             }
             i++; // skip backslash
             c = input[i];
-            if (buf_len + 1 >= capacity) {
-                capacity *= 2;
-                buf = xrealloc(buf, (size_t)capacity);
+            // Handle escape sequences
+            switch (c) {
+                case 'n': buf_append_char(&buf, &buf_len, &capacity, '\n'); break;
+                case 't': buf_append_char(&buf, &buf_len, &capacity, '\t'); break;
+                default:  buf_append_char(&buf, &buf_len, &capacity, c); break;
             }
-            buf[buf_len++] = c;
             i++;
             continue;
         }
@@ -103,36 +233,34 @@ static int read_word(const char *input, int start, char **out_value) {
                         return -1;
                     }
                     char next = input[i + 1];
-                    // Inside double quotes, only these are special escapes
                     if (next == '$' || next == '"' || next == '\\' ||
                         next == '`' || next == '\n') {
                         i++; // skip backslash
-                        if (buf_len + 1 >= capacity) {
-                            capacity *= 2;
-                            buf = xrealloc(buf, (size_t)capacity);
-                        }
-                        buf[buf_len++] = input[i];
+                        buf_append_char(&buf, &buf_len, &capacity, input[i]);
                         i++;
+                    } else if (next == 'n') {
+                        i += 2;
+                        buf_append_char(&buf, &buf_len, &capacity, '\n');
+                    } else if (next == 't') {
+                        i += 2;
+                        buf_append_char(&buf, &buf_len, &capacity, '\t');
                     } else {
-                        // Backslash is literal
-                        if (buf_len + 1 >= capacity) {
-                            capacity *= 2;
-                            buf = xrealloc(buf, (size_t)capacity);
-                        }
-                        buf[buf_len++] = '\\';
+                        buf_append_char(&buf, &buf_len, &capacity, '\\');
                         i++;
                     }
+                } else if (input[i] == '$' && input[i + 1] != '(') {
+                    // Variable expansion inside double quotes
+                    i++; // skip $
+                    int consumed = read_and_expand_var(input, i,
+                                                      &buf, &buf_len,
+                                                      &capacity);
+                    i += consumed;
                 } else {
-                    if (buf_len + 1 >= capacity) {
-                        capacity *= 2;
-                        buf = xrealloc(buf, (size_t)capacity);
-                    }
-                    buf[buf_len++] = input[i];
+                    buf_append_char(&buf, &buf_len, &capacity, input[i]);
                     i++;
                 }
             }
             if (input[i] == '\0') {
-                // Unterminated double quote
                 free(buf);
                 *out_value = NULL;
                 return -1;
@@ -141,19 +269,14 @@ static int read_word(const char *input, int start, char **out_value) {
             continue;
         }
 
-        // Single-quoted string
+        // Single-quoted string — everything literal
         if (c == '\'') {
             i++; // skip opening quote
             while (input[i] != '\0' && input[i] != '\'') {
-                if (buf_len + 1 >= capacity) {
-                    capacity *= 2;
-                    buf = xrealloc(buf, (size_t)capacity);
-                }
-                buf[buf_len++] = input[i];
+                buf_append_char(&buf, &buf_len, &capacity, input[i]);
                 i++;
             }
             if (input[i] == '\0') {
-                // Unterminated single quote
                 free(buf);
                 *out_value = NULL;
                 return -1;
@@ -163,11 +286,7 @@ static int read_word(const char *input, int start, char **out_value) {
         }
 
         // Regular character
-        if (buf_len + 1 >= capacity) {
-            capacity *= 2;
-            buf = xrealloc(buf, (size_t)capacity);
-        }
-        buf[buf_len++] = c;
+        buf_append_char(&buf, &buf_len, &capacity, c);
         i++;
     }
 

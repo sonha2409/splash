@@ -11,6 +11,7 @@
 #include "builtins.h"
 #include "command.h"
 #include "executor.h"
+#include "expand.h"
 #include "jobs.h"
 #include "parser.h"
 #include "signals.h"
@@ -217,6 +218,7 @@ static int execute_pipeline_impl(Pipeline *pl, const char *command_str) {
 
     if (pl->background) {
         printf("[%d] %d\n", job_id, pgid);
+        expand_set_last_bg_pid(pgid);
         free(pids);
         return 0;
     }
@@ -352,7 +354,15 @@ int executor_execute_line(const char *line) {
     Pipeline *pl = parser_parse(tokens);
     int status = 0;
     if (pl) {
+        // Track $_ (last argument of the command)
+        if (pl->num_commands > 0) {
+            SimpleCommand *last_cmd = pl->commands[pl->num_commands - 1];
+            if (last_cmd->argc > 0) {
+                expand_set_last_arg(last_cmd->argv[last_cmd->argc - 1]);
+            }
+        }
         status = executor_execute(pl, effective);
+        expand_set_last_status(status);
         pipeline_free(pl);
     }
     token_list_free(tokens);

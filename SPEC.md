@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 5 — Quoting, Escaping, and Expansions
-**Last completed feature**: 4.11 Auto-source config
+**Last completed feature**: 5.6 Tilde expansion
 
 ---
 
@@ -178,12 +178,12 @@ splash/
 
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
-| 5.1 | Double quotes | Preserve spaces inside, single argument. Allow `${}` expansion inside. | `TODO` | | |
-| 5.2 | Single quotes | Everything literal, no expansion. | `TODO` | | |
-| 5.3 | Backslash escaping | `\"`, `\\`, `\$`, `\&`, `\|`, `\n`, `\t`. Outside quotes: escape next char. | `TODO` | | |
-| 5.4 | Env variable expansion | `${VAR}` → value. Expand in unquoted and double-quoted contexts. Undefined = empty. | `TODO` | | |
-| 5.5 | Special variables | `${$}` = PID, `${?}` = last exit code, `${!}` = last bg PID, `${_}` = last arg, `${SHELL}` = binary path | `TODO` | | |
-| 5.6 | Tilde expansion | `~` → `$HOME`, `~user` → user's home (via `getpwnam()`), `~user/dir` → home + `/dir` | `TODO` | | |
+| 5.1 | Double quotes | Preserve spaces inside, single argument. Allow `${}` expansion inside. | `DONE` | 2026-03-17 | Tokenizer handles inline |
+| 5.2 | Single quotes | Everything literal, no expansion. | `DONE` | 2026-03-17 | Tokenizer handles inline |
+| 5.3 | Backslash escaping | `\"`, `\\`, `\$`, `\&`, `\|`, `\n`, `\t`. Outside quotes: escape next char. | `DONE` | 2026-03-17 | \n and \t produce actual chars |
+| 5.4 | Env variable expansion | `${VAR}` → value. Expand in unquoted and double-quoted contexts. Undefined = empty. | `DONE` | 2026-03-17 | Inline in tokenizer read_word |
+| 5.5 | Special variables | `${$}` = PID, `${?}` = last exit code, `${!}` = last bg PID, `${_}` = last arg, `${SHELL}` = binary path | `DONE` | 2026-03-17 | State tracked in expand.c |
+| 5.6 | Tilde expansion | `~` → `$HOME`, `~user` → user's home (via `getpwnam()`), `~user/dir` → home + `/dir` | `DONE` | 2026-03-17 | Only in unquoted word start |
 | 5.7 | Wildcarding | `*` and `?` via `opendir()`/`readdir()` + regex. No expansion inside quotes. Supports paths: `src/*.c` | `TODO` | | |
 | 5.8 | Command substitution | `$(command)` → fork child shell, read stdout, inject back. Strip trailing newlines. Supports nesting. | `TODO` | | |
 | 5.9 | Process substitution | `<(cmd)` / `>(cmd)` via `mkfifo()` in temp dir. Clean up after. | `STRETCH` | | |
