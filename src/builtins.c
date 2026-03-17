@@ -1,6 +1,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <libproc.h>
+#include <regex.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -932,28 +933,237 @@ static PipelineStage *create_env_stage(void) {
 }
 
 
+// --- Structured where filter ---
+
+typedef enum {
+    WHERE_EQ,       // ==
+    WHERE_NE,       // !=
+    WHERE_GT,       // >
+    WHERE_LT,       // <
+    WHERE_GE,       // >=
+    WHERE_LE,       // <=
+    WHERE_REGEX     // =~
+} WhereOp;
+
+typedef struct {
+    char *col_name;     // Column to compare (owned)
+    WhereOp op;
+    char *raw_val;      // Raw comparison value string (owned)
+    regex_t *compiled;  // Compiled regex for =~ (owned, or NULL)
+} WhereStageState;
+
+// Parse comparison value and compare against cell. Returns 1 if match.
+static int where_compare(const Value *cell, WhereOp op, const char *raw_val,
+                          regex_t *compiled) {
+    if (!cell || cell->type == VALUE_NIL) {
+        return 0;
+    }
+
+    if (op == WHERE_REGEX) {
+        if (!compiled) {
+            return 0;
+        }
+        char *cell_str = value_to_string(cell);
+        int match = regexec(compiled, cell_str, 0, NULL, 0) == 0;
+        free(cell_str);
+        return match;
+    }
+
+    // Try numeric comparison first
+    if (cell->type == VALUE_INT) {
+        char *end;
+        long long cmp_val = strtoll(raw_val, &end, 10);
+        if (*end == '\0') {
+            int64_t a = cell->integer;
+            int64_t b = (int64_t)cmp_val;
+            switch (op) {
+                case WHERE_EQ: return a == b;
+                case WHERE_NE: return a != b;
+                case WHERE_GT: return a > b;
+                case WHERE_LT: return a < b;
+                case WHERE_GE: return a >= b;
+                case WHERE_LE: return a <= b;
+                default: return 0;
+            }
+        }
+    }
+
+    if (cell->type == VALUE_FLOAT) {
+        char *end;
+        double cmp_val = strtod(raw_val, &end);
+        if (*end == '\0') {
+            double a = cell->floating;
+            double b = cmp_val;
+            switch (op) {
+                case WHERE_EQ: return a == b;
+                case WHERE_NE: return a != b;
+                case WHERE_GT: return a > b;
+                case WHERE_LT: return a < b;
+                case WHERE_GE: return a >= b;
+                case WHERE_LE: return a <= b;
+                default: return 0;
+            }
+        }
+    }
+
+    // String comparison
+    char *cell_str = value_to_string(cell);
+    int cmp = strcmp(cell_str, raw_val);
+    free(cell_str);
+
+    switch (op) {
+        case WHERE_EQ: return cmp == 0;
+        case WHERE_NE: return cmp != 0;
+        case WHERE_GT: return cmp > 0;
+        case WHERE_LT: return cmp < 0;
+        case WHERE_GE: return cmp >= 0;
+        case WHERE_LE: return cmp <= 0;
+        default: return 0;
+    }
+}
+
+static Value *where_stage_next(PipelineStage *self) {
+    WhereStageState *s = self->state;
+
+    Value *v;
+    while ((v = self->upstream->next(self->upstream)) != NULL) {
+        if (v->type != VALUE_TABLE) {
+            return v; // Pass through non-table values
+        }
+
+        Table *src = v->table;
+        int col_idx = table_col_index(src, s->col_name);
+        if (col_idx < 0) {
+            fprintf(stderr, "splash: where: column '%s' not found\n",
+                    s->col_name);
+            return v; // Return unfiltered if column not found
+        }
+
+        // Build filtered table with same schema
+        const char **names = xmalloc(src->col_count * sizeof(char *));
+        ValueType *types = xmalloc(src->col_count * sizeof(ValueType));
+        for (size_t i = 0; i < src->col_count; i++) {
+            names[i] = src->columns[i].name;
+            types[i] = src->columns[i].type;
+        }
+        Table *filtered = table_new(names, types, src->col_count);
+        free(names);
+        free(types);
+
+        for (size_t r = 0; r < src->row_count; r++) {
+            Value *cell = table_get(src, r, (size_t)col_idx);
+            if (where_compare(cell, s->op, s->raw_val, s->compiled)) {
+                // Clone row values into filtered table
+                Value **row_vals = xmalloc(src->col_count * sizeof(Value *));
+                for (size_t c = 0; c < src->col_count; c++) {
+                    row_vals[c] = value_clone(table_get(src, r, c));
+                }
+                table_add_row(filtered, row_vals, src->col_count);
+                free(row_vals);
+            }
+        }
+
+        value_free(v);
+        return value_table(filtered);
+    }
+
+    return NULL;
+}
+
+static void where_stage_free(PipelineStage *self) {
+    WhereStageState *s = self->state;
+    free(s->col_name);
+    free(s->raw_val);
+    if (s->compiled) {
+        regfree(s->compiled);
+        free(s->compiled);
+    }
+    free(s);
+}
+
+static PipelineStage *create_where_stage(SimpleCommand *cmd,
+                                         PipelineStage *upstream) {
+    // Usage: where <col> <op> <val>
+    if (cmd->argc < 4) {
+        fprintf(stderr, "splash: where: usage: where <column> <op> <value>\n");
+        return upstream; // Return upstream unchanged
+    }
+
+    const char *col = cmd->argv[1];
+    const char *op_str = cmd->argv[2];
+    const char *val = cmd->argv[3];
+
+    WhereOp op;
+    if (strcmp(op_str, "==") == 0)      op = WHERE_EQ;
+    else if (strcmp(op_str, "!=") == 0) op = WHERE_NE;
+    else if (strcmp(op_str, ">") == 0)  op = WHERE_GT;
+    else if (strcmp(op_str, "<") == 0)  op = WHERE_LT;
+    else if (strcmp(op_str, ">=") == 0) op = WHERE_GE;
+    else if (strcmp(op_str, "<=") == 0) op = WHERE_LE;
+    else if (strcmp(op_str, "=~") == 0) op = WHERE_REGEX;
+    else {
+        fprintf(stderr, "splash: where: unknown operator '%s'\n", op_str);
+        return upstream;
+    }
+
+    WhereStageState *s = xmalloc(sizeof(WhereStageState));
+    s->col_name = xstrdup(col);
+    s->op = op;
+    s->raw_val = xstrdup(val);
+    s->compiled = NULL;
+
+    if (op == WHERE_REGEX) {
+        s->compiled = xmalloc(sizeof(regex_t));
+        int rc = regcomp(s->compiled, val, REG_EXTENDED | REG_NOSUB);
+        if (rc != 0) {
+            char errbuf[128];
+            regerror(rc, s->compiled, errbuf, sizeof(errbuf));
+            fprintf(stderr, "splash: where: bad regex '%s': %s\n", val, errbuf);
+            regfree(s->compiled);
+            free(s->compiled);
+            s->compiled = NULL;
+        }
+    }
+
+    return pipeline_stage_new(where_stage_next, where_stage_free, s, upstream);
+}
+
+
 int builtin_is_structured(const char *name) {
     return strcmp(name, "ls") == 0 ||
            strcmp(name, "ps") == 0 ||
            strcmp(name, "find") == 0 ||
-           strcmp(name, "env") == 0;
+           strcmp(name, "env") == 0 ||
+           strcmp(name, "where") == 0;
 }
 
 PipelineStage *builtin_create_stage(SimpleCommand *cmd,
                                     PipelineStage *upstream) {
     const char *name = cmd->argv[0];
-    pipeline_stage_free(upstream); // All current structured builtins are sources
+
+    // Source builtins: ignore upstream (free it if non-NULL)
     if (strcmp(name, "ls") == 0) {
+        pipeline_stage_free(upstream);
         return create_ls_stage(cmd);
     }
     if (strcmp(name, "ps") == 0) {
+        pipeline_stage_free(upstream);
         return create_ps_stage();
     }
     if (strcmp(name, "find") == 0) {
+        pipeline_stage_free(upstream);
         return create_find_stage(cmd);
     }
     if (strcmp(name, "env") == 0) {
+        pipeline_stage_free(upstream);
         return create_env_stage();
     }
+
+    // Filter builtins: chain onto upstream
+    if (strcmp(name, "where") == 0) {
+        return create_where_stage(cmd, upstream);
+    }
+
+    pipeline_stage_free(upstream);
     return NULL;
 }

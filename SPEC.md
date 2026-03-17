@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 7 — Structured Data Pipes (Novel Feature)
-**Last completed feature**: 7.9 Built-in env (structured)
+**Last completed feature**: 7.10 where filter
 
 ---
 
@@ -230,7 +230,7 @@ splash/
 | 7.7 | Built-in `ps` (structured) | Table: `pid`, `name`, `cpu_time`, `mem`, `status`. Uses `libproc` on macOS. | `DONE` | 2026-03-17 | cpu_time (total seconds) instead of cpu%, proc_listallpids + proc_pidinfo |
 | 7.8 | Built-in `find` (structured) | Table: `path`, `name`, `size`, `type`. Recursive directory walk. | `DONE` | 2026-03-17 | lstat-based, skips symlink dirs to avoid loops, dotfiles included |
 | 7.9 | Built-in `env` (structured) | Table: `key`, `value` from environment. | `DONE` | 2026-03-17 | Iterates environ, splits on first = |
-| 7.10 | `where` filter | `where <col> <op> <val>`. Ops: `==`, `!=`, `>`, `<`, `>=`, `<=`, `=~` (regex). | `TODO` | | |
+| 7.10 | `where` filter | `where <col> <op> <val>`. Ops: `==`, `!=`, `>`, `<`, `>=`, `<=`, `=~` (regex). | `DONE` | 2026-03-17 | Type-aware comparison (int/float/string), POSIX regex for =~, operators like > need quoting |
 | 7.11 | `sort` filter | `sort <col>`. Ascending default, `--desc` flag. | `TODO` | | |
 | 7.12 | `select` filter | `select <col1> <col2> ...` — keep only named columns. | `TODO` | | |
 | 7.13 | `first` / `last` | `first <N>` / `last <N>` — take first or last N rows. | `TODO` | | |

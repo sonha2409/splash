@@ -120,9 +120,12 @@ static int pipeline_has_structured(Pipeline *pl) {
 // Check if a command name is a structured filter (builtin that operates on |> data).
 // Structured filters transform pipeline stages rather than producing text output.
 static int is_structured_filter(const char *name) {
-    // Filters will be added in 7.10+
-    (void)name;
-    return 0;
+    return strcmp(name, "where") == 0 ||
+           strcmp(name, "sort") == 0 ||
+           strcmp(name, "select") == 0 ||
+           strcmp(name, "first") == 0 ||
+           strcmp(name, "last") == 0 ||
+           strcmp(name, "count") == 0;
 }
 
 // Execute a pipeline that contains |> structured pipe segments.
