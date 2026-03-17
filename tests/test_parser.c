@@ -112,6 +112,136 @@ static void test_parser_quoted_args(void) {
     token_list_free(tokens);
 }
 
+static void test_parser_output_redirect(void) {
+    TokenList *tokens = tokenizer_tokenize("ls > out.txt");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->num_commands, 1);
+    ASSERT_STR_EQ(pl->commands[0]->argv[0], "ls");
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 1);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[0].type, REDIRECT_OUTPUT);
+    ASSERT_STR_EQ(pl->commands[0]->redirects[0].target, "out.txt");
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_append_redirect(void) {
+    TokenList *tokens = tokenizer_tokenize("echo hi >> log.txt");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 1);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[0].type, REDIRECT_APPEND);
+    ASSERT_STR_EQ(pl->commands[0]->redirects[0].target, "log.txt");
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_input_redirect(void) {
+    TokenList *tokens = tokenizer_tokenize("cat < input.txt");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_STR_EQ(pl->commands[0]->argv[0], "cat");
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 1);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[0].type, REDIRECT_INPUT);
+    ASSERT_STR_EQ(pl->commands[0]->redirects[0].target, "input.txt");
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_stderr_redirect(void) {
+    TokenList *tokens = tokenizer_tokenize("cmd 2> err.log");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 1);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[0].type, REDIRECT_ERR);
+    ASSERT_STR_EQ(pl->commands[0]->redirects[0].target, "err.log");
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_out_err_redirect(void) {
+    TokenList *tokens = tokenizer_tokenize("cmd >& all.log");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 1);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[0].type, REDIRECT_OUT_ERR);
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_append_err_redirect(void) {
+    TokenList *tokens = tokenizer_tokenize("cmd >>& all.log");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 1);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[0].type, REDIRECT_APPEND_ERR);
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_multiple_redirects(void) {
+    TokenList *tokens = tokenizer_tokenize("cmd < in.txt > out.txt 2> err.txt");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 3);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[0].type, REDIRECT_INPUT);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[1].type, REDIRECT_OUTPUT);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[2].type, REDIRECT_ERR);
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_redirect_before_args(void) {
+    TokenList *tokens = tokenizer_tokenize("> out.txt ls -la");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_STR_EQ(pl->commands[0]->argv[0], "ls");
+    ASSERT_STR_EQ(pl->commands[0]->argv[1], "-la");
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 1);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[0].type, REDIRECT_OUTPUT);
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_redirect_between_args(void) {
+    TokenList *tokens = tokenizer_tokenize("grep > out.txt pattern");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->commands[0]->argc, 2);
+    ASSERT_STR_EQ(pl->commands[0]->argv[0], "grep");
+    ASSERT_STR_EQ(pl->commands[0]->argv[1], "pattern");
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 1);
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_redirect_missing_filename(void) {
+    TokenList *tokens = tokenizer_tokenize("ls >");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NULL(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_redirect_with_pipe(void) {
+    TokenList *tokens = tokenizer_tokenize("ls 2> err.txt | grep foo > out.txt");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NOT_NULL(pl);
+    ASSERT_INT_EQ(pl->num_commands, 2);
+    ASSERT_INT_EQ(pl->commands[0]->num_redirects, 1);
+    ASSERT_INT_EQ(pl->commands[0]->redirects[0].type, REDIRECT_ERR);
+    ASSERT_INT_EQ(pl->commands[1]->num_redirects, 1);
+    ASSERT_INT_EQ(pl->commands[1]->redirects[0].type, REDIRECT_OUTPUT);
+    pipeline_free(pl);
+    token_list_free(tokens);
+}
+
+static void test_parser_redirect_only_no_command(void) {
+    TokenList *tokens = tokenizer_tokenize("> out.txt");
+    Pipeline *pl = parser_parse(tokens);
+    ASSERT_NULL(pl); // redirect without a command word
+    token_list_free(tokens);
+}
+
 static void test_parser_absolute_path_command(void) {
     TokenList *tokens = tokenizer_tokenize("/bin/echo hello");
     Pipeline *pl = parser_parse(tokens);
@@ -136,6 +266,18 @@ int main(void) {
     test_parser_error_double_pipe_no_cmd();
     test_parser_incomplete_input();
     test_parser_quoted_args();
+    test_parser_output_redirect();
+    test_parser_append_redirect();
+    test_parser_input_redirect();
+    test_parser_stderr_redirect();
+    test_parser_out_err_redirect();
+    test_parser_append_err_redirect();
+    test_parser_multiple_redirects();
+    test_parser_redirect_before_args();
+    test_parser_redirect_between_args();
+    test_parser_redirect_missing_filename();
+    test_parser_redirect_with_pipe();
+    test_parser_redirect_only_no_command();
     test_parser_absolute_path_command();
 
     TEST_REPORT();

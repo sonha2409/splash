@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 2 — I/O Redirection and Pipes
-**Last completed feature**: 1.6 REPL loop
+**Last completed feature**: 2.9 isatty() check
 
 ---
 
@@ -115,15 +115,15 @@ splash/
 
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
-| 2.1 | Output redirection `>` | Open file `O_WRONLY\|O_CREAT\|O_TRUNC`, `dup2()` to stdout | `TODO` | | |
-| 2.2 | Append redirection `>>` | Same but `O_APPEND` instead of `O_TRUNC` | `TODO` | | |
-| 2.3 | Input redirection `<` | Open file `O_RDONLY`, `dup2()` to stdin | `TODO` | | |
-| 2.4 | Stderr redirection `2>` | `dup2()` to fd 2 | `TODO` | | |
-| 2.5 | Combined stdout+stderr `>&` | `dup2()` both fd 1 and fd 2 to file | `TODO` | | |
-| 2.6 | Combined append `>>&` | Same with `O_APPEND` | `TODO` | | |
-| 2.7 | Pipes `\|` | `pipe()` + `dup2()` to connect stdout→stdin. Support N-stage pipelines. | `TODO` | | |
-| 2.8 | Background execution `&` | Don't `waitpid()` for last command, print `[PID]` | `TODO` | | |
-| 2.9 | `isatty()` check | If stdin is not a terminal, suppress prompt (needed for script input / testing) | `TODO` | | |
+| 2.1 | Output redirection `>` | Open file `O_WRONLY\|O_CREAT\|O_TRUNC`, `dup2()` to stdout | `DONE` | 2026-03-17 | Implemented with Redirection struct on SimpleCommand |
+| 2.2 | Append redirection `>>` | Same but `O_APPEND` instead of `O_TRUNC` | `DONE` | 2026-03-17 | |
+| 2.3 | Input redirection `<` | Open file `O_RDONLY`, `dup2()` to stdin | `DONE` | 2026-03-17 | |
+| 2.4 | Stderr redirection `2>` | `dup2()` to fd 2 | `DONE` | 2026-03-17 | |
+| 2.5 | Combined stdout+stderr `>&` | `dup2()` both fd 1 and fd 2 to file | `DONE` | 2026-03-17 | |
+| 2.6 | Combined append `>>&` | Same with `O_APPEND` | `DONE` | 2026-03-17 | |
+| 2.7 | Pipes `\|` | `pipe()` + `dup2()` to connect stdout→stdin. Support N-stage pipelines. | `DONE` | 2026-03-17 | Already implemented in M1, now works with redirections |
+| 2.8 | Background execution `&` | Don't `waitpid()` for last command, print `[PID]` | `DONE` | 2026-03-17 | Already implemented in M1 |
+| 2.9 | `isatty()` check | If stdin is not a terminal, suppress prompt (needed for script input / testing) | `DONE` | 2026-03-17 | Enables integration testing via piped input |
 
 **Verification**: `ls -al > out`, `cat < out`, `ls | grep command`, `ls | grep c | wc -l`, `sleep 5 &` all work correctly.
 

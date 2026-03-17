@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "command.h"
 #include "executor.h"
@@ -13,13 +14,18 @@
 int main(void) {
     char line[MAX_INPUT_LINE];
     int last_status = 0;
+    int interactive = isatty(STDIN_FILENO);
 
     for (;;) {
-        printf("splash> ");
-        fflush(stdout);
+        if (interactive) {
+            printf("splash> ");
+            fflush(stdout);
+        }
 
         if (!fgets(line, sizeof(line), stdin)) {
-            printf("\nGood bye!!\n");
+            if (interactive) {
+                printf("\nGood bye!!\n");
+            }
             break;
         }
 

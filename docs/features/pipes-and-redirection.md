@@ -23,6 +23,29 @@ The executor takes a `Pipeline` AST and runs it via `fork()`/`execvp()`. Two cod
 3. Parent: close all pipe fds immediately after forking all children
 4. `waitpid()` for every child — return last command's exit status
 
+### File Redirections (2.1–2.6)
+
+Added `Redirection` struct to `SimpleCommand` — a dynamic array of `{type, target}` pairs. Six redirect types map directly to `open()` flag combinations:
+
+| Syntax | RedirectType | open() flags | dup2 target |
+|--------|-------------|-------------|-------------|
+| `>` | `REDIRECT_OUTPUT` | `O_WRONLY\|O_CREAT\|O_TRUNC` | stdout |
+| `>>` | `REDIRECT_APPEND` | `O_WRONLY\|O_CREAT\|O_APPEND` | stdout |
+| `<` | `REDIRECT_INPUT` | `O_RDONLY` | stdin |
+| `2>` | `REDIRECT_ERR` | `O_WRONLY\|O_CREAT\|O_TRUNC` | stderr |
+| `>&` | `REDIRECT_OUT_ERR` | `O_WRONLY\|O_CREAT\|O_TRUNC` | stdout + stderr |
+| `>>&` | `REDIRECT_APPEND_ERR` | `O_WRONLY\|O_CREAT\|O_APPEND` | stdout + stderr |
+
+**Parser**: `parse_simple_command()` grammar is now `(WORD | redirection)+` where `redirection = REDIRECT_OP WORD`. Redirections can appear anywhere in the command (`> out ls -la` is valid). A command with only redirections and no words is a syntax error.
+
+**Executor**: `apply_redirections()` runs in child process before `execvp()`. For pipelines, redirections apply after pipe wiring — so `ls 2> err.txt | grep foo > out.txt` correctly redirects stderr of `ls` and stdout of `grep` while pipes still connect stdout of `ls` to stdin of `grep`.
+
+File permissions: new files created with mode `0644`.
+
+### isatty() Check (2.9)
+
+`main.c` checks `isatty(STDIN_FILENO)` at startup. Non-interactive mode (piped input, script input) suppresses the prompt and goodbye message. Required for integration testing and script execution.
+
 ### Background Execution
 
 For `pipeline->background`: parent prints `[PID]` instead of calling `waitpid()`.

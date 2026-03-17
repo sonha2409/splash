@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,89 @@
 #include "executor.h"
 #include "util.h"
 
+// Apply all redirections for a command. Called in child process before exec.
+// Returns 0 on success, -1 on failure (with error message printed).
+static int apply_redirections(SimpleCommand *cmd) {
+    for (int i = 0; i < cmd->num_redirects; i++) {
+        Redirection *r = &cmd->redirects[i];
+        int fd = -1;
+        int flags = 0;
+
+        switch (r->type) {
+            case REDIRECT_OUTPUT:
+                flags = O_WRONLY | O_CREAT | O_TRUNC;
+                break;
+            case REDIRECT_APPEND:
+                flags = O_WRONLY | O_CREAT | O_APPEND;
+                break;
+            case REDIRECT_INPUT:
+                flags = O_RDONLY;
+                break;
+            case REDIRECT_ERR:
+                flags = O_WRONLY | O_CREAT | O_TRUNC;
+                break;
+            case REDIRECT_OUT_ERR:
+                flags = O_WRONLY | O_CREAT | O_TRUNC;
+                break;
+            case REDIRECT_APPEND_ERR:
+                flags = O_WRONLY | O_CREAT | O_APPEND;
+                break;
+        }
+
+        fd = open(r->target, flags, 0644);
+        if (fd == -1) {
+            fprintf(stderr, "splash: %s: %s\n", r->target, strerror(errno));
+            return -1;
+        }
+
+        switch (r->type) {
+            case REDIRECT_OUTPUT:
+            case REDIRECT_APPEND:
+                if (dup2(fd, STDOUT_FILENO) == -1) {
+                    fprintf(stderr, "splash: redirect stdout to '%s': %s\n",
+                            r->target, strerror(errno));
+                    close(fd);
+                    return -1;
+                }
+                break;
+            case REDIRECT_INPUT:
+                if (dup2(fd, STDIN_FILENO) == -1) {
+                    fprintf(stderr, "splash: redirect stdin from '%s': %s\n",
+                            r->target, strerror(errno));
+                    close(fd);
+                    return -1;
+                }
+                break;
+            case REDIRECT_ERR:
+                if (dup2(fd, STDERR_FILENO) == -1) {
+                    fprintf(stderr, "splash: redirect stderr to '%s': %s\n",
+                            r->target, strerror(errno));
+                    close(fd);
+                    return -1;
+                }
+                break;
+            case REDIRECT_OUT_ERR:
+            case REDIRECT_APPEND_ERR:
+                if (dup2(fd, STDOUT_FILENO) == -1) {
+                    fprintf(stderr, "splash: redirect stdout to '%s': %s\n",
+                            r->target, strerror(errno));
+                    close(fd);
+                    return -1;
+                }
+                if (dup2(fd, STDERR_FILENO) == -1) {
+                    fprintf(stderr, "splash: redirect stderr to '%s': %s\n",
+                            r->target, strerror(errno));
+                    close(fd);
+                    return -1;
+                }
+                break;
+        }
+
+        close(fd);
+    }
+    return 0;
+}
+
 // Execute a single command (no pipes).
 static int execute_single(SimpleCommand *cmd, int background) {
     pid_t pid = fork();
@@ -18,7 +102,10 @@ static int execute_single(SimpleCommand *cmd, int background) {
     }
 
     if (pid == 0) {
-        // Child
+        // Child: apply redirections, then exec
+        if (apply_redirections(cmd) == -1) {
+            _exit(1);
+        }
         execvp(cmd->argv[0], cmd->argv);
         fprintf(stderr, "splash: %s: %s\n", cmd->argv[0], strerror(errno));
         _exit(127);
@@ -112,6 +199,11 @@ static int execute_pipeline(Pipeline *pl) {
             for (int j = 0; j < n - 1; j++) {
                 close(pipes[j][0]);
                 close(pipes[j][1]);
+            }
+
+            // Apply per-command redirections (after pipe wiring)
+            if (apply_redirections(pl->commands[i]) == -1) {
+                _exit(1);
             }
 
             execvp(pl->commands[i]->argv[0], pl->commands[i]->argv);
