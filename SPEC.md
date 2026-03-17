@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 7 — Structured Data Pipes (Novel Feature)
-**Last completed feature**: 7.10 where filter
+**Last completed feature**: 7.14 count
 
 ---
 
@@ -231,10 +231,10 @@ splash/
 | 7.8 | Built-in `find` (structured) | Table: `path`, `name`, `size`, `type`. Recursive directory walk. | `DONE` | 2026-03-17 | lstat-based, skips symlink dirs to avoid loops, dotfiles included |
 | 7.9 | Built-in `env` (structured) | Table: `key`, `value` from environment. | `DONE` | 2026-03-17 | Iterates environ, splits on first = |
 | 7.10 | `where` filter | `where <col> <op> <val>`. Ops: `==`, `!=`, `>`, `<`, `>=`, `<=`, `=~` (regex). | `DONE` | 2026-03-17 | Type-aware comparison (int/float/string), POSIX regex for =~, operators like > need quoting |
-| 7.11 | `sort` filter | `sort <col>`. Ascending default, `--desc` flag. | `TODO` | | |
-| 7.12 | `select` filter | `select <col1> <col2> ...` — keep only named columns. | `TODO` | | |
-| 7.13 | `first` / `last` | `first <N>` / `last <N>` — take first or last N rows. | `TODO` | | |
-| 7.14 | `count` | Return single value: number of rows. | `TODO` | | |
+| 7.11 | `sort` filter | `sort <col>`. Ascending default, `--desc` flag. | `DONE` | 2026-03-17 | qsort_r with type-aware comparison, NIL sorts last |
+| 7.12 | `select` filter | `select <col1> <col2> ...` — keep only named columns. | `DONE` | 2026-03-17 | Multi-column support, unknown columns warned and skipped |
+| 7.13 | `first` / `last` | `first <N>` / `last <N>` — take first or last N rows. | `DONE` | 2026-03-17 | Default N=10, clamps to table size |
+| 7.14 | `count` | Return single value: number of rows. | `DONE` | 2026-03-17 | Returns VALUE_INT, skips non-table values |
 | 7.15 | `from-csv/json/lines` | Parse text stdin into a table. | `TODO` | | |
 | 7.16 | `to-csv/json` | Serialize table to text format. | `TODO` | | |
 

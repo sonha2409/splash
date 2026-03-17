@@ -1129,12 +1129,296 @@ static PipelineStage *create_where_stage(SimpleCommand *cmd,
 }
 
 
+// --- Structured sort filter ---
+
+typedef struct {
+    char *col_name;
+    int descending;
+} SortStageState;
+
+// Comparison context for qsort_r — we need col index and direction.
+typedef struct {
+    int col_idx;
+    int descending;
+} SortCtx;
+
+static int sort_cmp(void *ctx_ptr, const void *a, const void *b) {
+    SortCtx *ctx = ctx_ptr;
+    const Row *ra = a;
+    const Row *rb = b;
+    Value *va = ra->values[ctx->col_idx];
+    Value *vb = rb->values[ctx->col_idx];
+
+    // NIL sorts last
+    if (va->type == VALUE_NIL && vb->type == VALUE_NIL) return 0;
+    if (va->type == VALUE_NIL) return 1;
+    if (vb->type == VALUE_NIL) return -1;
+
+    int result = 0;
+    if (va->type == VALUE_INT && vb->type == VALUE_INT) {
+        if (va->integer < vb->integer) result = -1;
+        else if (va->integer > vb->integer) result = 1;
+    } else if (va->type == VALUE_FLOAT && vb->type == VALUE_FLOAT) {
+        if (va->floating < vb->floating) result = -1;
+        else if (va->floating > vb->floating) result = 1;
+    } else {
+        char *sa = value_to_string(va);
+        char *sb = value_to_string(vb);
+        result = strcmp(sa, sb);
+        free(sa);
+        free(sb);
+    }
+
+    return ctx->descending ? -result : result;
+}
+
+static Value *sort_stage_next(PipelineStage *self) {
+    SortStageState *s = self->state;
+
+    Value *v;
+    while ((v = self->upstream->next(self->upstream)) != NULL) {
+        if (v->type != VALUE_TABLE) {
+            return v;
+        }
+
+        Table *src = v->table;
+        int col_idx = table_col_index(src, s->col_name);
+        if (col_idx < 0) {
+            fprintf(stderr, "splash: sort: column '%s' not found\n",
+                    s->col_name);
+            return v;
+        }
+
+        // Clone the table and sort its rows in-place
+        Table *sorted = table_clone(src);
+        value_free(v);
+
+        SortCtx ctx = {.col_idx = col_idx, .descending = s->descending};
+        qsort_r(sorted->rows, sorted->row_count, sizeof(Row), &ctx, sort_cmp);
+
+        return value_table(sorted);
+    }
+    return NULL;
+}
+
+static void sort_stage_free(PipelineStage *self) {
+    SortStageState *s = self->state;
+    free(s->col_name);
+    free(s);
+}
+
+static PipelineStage *create_sort_stage(SimpleCommand *cmd,
+                                        PipelineStage *upstream) {
+    if (cmd->argc < 2) {
+        fprintf(stderr, "splash: sort: usage: sort <column> [--desc]\n");
+        return upstream;
+    }
+    SortStageState *s = xmalloc(sizeof(SortStageState));
+    s->col_name = xstrdup(cmd->argv[1]);
+    s->descending = 0;
+    for (int i = 2; i < cmd->argc; i++) {
+        if (strcmp(cmd->argv[i], "--desc") == 0) {
+            s->descending = 1;
+        }
+    }
+    return pipeline_stage_new(sort_stage_next, sort_stage_free, s, upstream);
+}
+
+
+// --- Structured select filter ---
+
+typedef struct {
+    char **col_names;
+    int num_cols;
+} SelectStageState;
+
+static Value *select_stage_next(PipelineStage *self) {
+    SelectStageState *s = self->state;
+
+    Value *v;
+    while ((v = self->upstream->next(self->upstream)) != NULL) {
+        if (v->type != VALUE_TABLE) {
+            return v;
+        }
+
+        Table *src = v->table;
+
+        // Resolve column indices
+        int *indices = xmalloc((size_t)s->num_cols * sizeof(int));
+        const char **names = xmalloc((size_t)s->num_cols * sizeof(char *));
+        ValueType *types = xmalloc((size_t)s->num_cols * sizeof(ValueType));
+        int valid = 0;
+        for (int i = 0; i < s->num_cols; i++) {
+            int idx = table_col_index(src, s->col_names[i]);
+            if (idx >= 0) {
+                indices[valid] = idx;
+                names[valid] = src->columns[idx].name;
+                types[valid] = src->columns[idx].type;
+                valid++;
+            } else {
+                fprintf(stderr, "splash: select: column '%s' not found\n",
+                        s->col_names[i]);
+            }
+        }
+
+        if (valid == 0) {
+            free(indices);
+            free(names);
+            free(types);
+            return v; // No valid columns — return original
+        }
+
+        Table *result = table_new(names, types, (size_t)valid);
+        for (size_t r = 0; r < src->row_count; r++) {
+            Value **row_vals = xmalloc((size_t)valid * sizeof(Value *));
+            for (int c = 0; c < valid; c++) {
+                row_vals[c] = value_clone(table_get(src, r, (size_t)indices[c]));
+            }
+            table_add_row(result, row_vals, (size_t)valid);
+            free(row_vals);
+        }
+
+        free(indices);
+        free(names);
+        free(types);
+        value_free(v);
+        return value_table(result);
+    }
+    return NULL;
+}
+
+static void select_stage_free(PipelineStage *self) {
+    SelectStageState *s = self->state;
+    for (int i = 0; i < s->num_cols; i++) {
+        free(s->col_names[i]);
+    }
+    free(s->col_names);
+    free(s);
+}
+
+static PipelineStage *create_select_stage(SimpleCommand *cmd,
+                                          PipelineStage *upstream) {
+    if (cmd->argc < 2) {
+        fprintf(stderr, "splash: select: usage: select <col1> [col2] ...\n");
+        return upstream;
+    }
+    SelectStageState *s = xmalloc(sizeof(SelectStageState));
+    s->num_cols = cmd->argc - 1;
+    s->col_names = xmalloc((size_t)s->num_cols * sizeof(char *));
+    for (int i = 0; i < s->num_cols; i++) {
+        s->col_names[i] = xstrdup(cmd->argv[i + 1]);
+    }
+    return pipeline_stage_new(select_stage_next, select_stage_free, s, upstream);
+}
+
+
+// --- Structured first / last filters ---
+
+typedef struct {
+    int n;
+    int is_last;    // 0 = first, 1 = last
+} FirstLastStageState;
+
+static Value *first_last_stage_next(PipelineStage *self) {
+    FirstLastStageState *s = self->state;
+
+    Value *v;
+    while ((v = self->upstream->next(self->upstream)) != NULL) {
+        if (v->type != VALUE_TABLE) {
+            return v;
+        }
+
+        Table *src = v->table;
+        size_t total = src->row_count;
+        size_t take = (size_t)s->n;
+        if (take > total) {
+            take = total;
+        }
+
+        // Determine start index
+        size_t start = 0;
+        if (s->is_last) {
+            start = total - take;
+        }
+
+        // Build new table with subset of rows
+        const char **names = xmalloc(src->col_count * sizeof(char *));
+        ValueType *types = xmalloc(src->col_count * sizeof(ValueType));
+        for (size_t i = 0; i < src->col_count; i++) {
+            names[i] = src->columns[i].name;
+            types[i] = src->columns[i].type;
+        }
+        Table *result = table_new(names, types, src->col_count);
+        free(names);
+        free(types);
+
+        for (size_t r = start; r < start + take; r++) {
+            Value **row_vals = xmalloc(src->col_count * sizeof(Value *));
+            for (size_t c = 0; c < src->col_count; c++) {
+                row_vals[c] = value_clone(table_get(src, r, c));
+            }
+            table_add_row(result, row_vals, src->col_count);
+            free(row_vals);
+        }
+
+        value_free(v);
+        return value_table(result);
+    }
+    return NULL;
+}
+
+static void first_last_stage_free(PipelineStage *self) {
+    free(self->state);
+}
+
+static PipelineStage *create_first_last_stage(SimpleCommand *cmd,
+                                              PipelineStage *upstream,
+                                              int is_last) {
+    int n = 10; // Default
+    if (cmd->argc > 1) {
+        n = atoi(cmd->argv[1]);
+        if (n <= 0) n = 10;
+    }
+    FirstLastStageState *s = xmalloc(sizeof(FirstLastStageState));
+    s->n = n;
+    s->is_last = is_last;
+    return pipeline_stage_new(first_last_stage_next, first_last_stage_free,
+                              s, upstream);
+}
+
+
+// --- Structured count filter ---
+
+static Value *count_stage_next(PipelineStage *self) {
+    Value *v;
+    while ((v = self->upstream->next(self->upstream)) != NULL) {
+        if (v->type != VALUE_TABLE) {
+            value_free(v);
+            continue;
+        }
+        size_t n = v->table->row_count;
+        value_free(v);
+        return value_int((int64_t)n);
+    }
+    return NULL;
+}
+
+static PipelineStage *create_count_stage(PipelineStage *upstream) {
+    return pipeline_stage_new(count_stage_next, NULL, NULL, upstream);
+}
+
+
 int builtin_is_structured(const char *name) {
     return strcmp(name, "ls") == 0 ||
            strcmp(name, "ps") == 0 ||
            strcmp(name, "find") == 0 ||
            strcmp(name, "env") == 0 ||
-           strcmp(name, "where") == 0;
+           strcmp(name, "where") == 0 ||
+           strcmp(name, "sort") == 0 ||
+           strcmp(name, "select") == 0 ||
+           strcmp(name, "first") == 0 ||
+           strcmp(name, "last") == 0 ||
+           strcmp(name, "count") == 0;
 }
 
 PipelineStage *builtin_create_stage(SimpleCommand *cmd,
@@ -1162,6 +1446,21 @@ PipelineStage *builtin_create_stage(SimpleCommand *cmd,
     // Filter builtins: chain onto upstream
     if (strcmp(name, "where") == 0) {
         return create_where_stage(cmd, upstream);
+    }
+    if (strcmp(name, "sort") == 0) {
+        return create_sort_stage(cmd, upstream);
+    }
+    if (strcmp(name, "select") == 0) {
+        return create_select_stage(cmd, upstream);
+    }
+    if (strcmp(name, "first") == 0) {
+        return create_first_last_stage(cmd, upstream, 0);
+    }
+    if (strcmp(name, "last") == 0) {
+        return create_first_last_stage(cmd, upstream, 1);
+    }
+    if (strcmp(name, "count") == 0) {
+        return create_count_stage(upstream);
     }
 
     pipeline_stage_free(upstream);
