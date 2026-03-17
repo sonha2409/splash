@@ -77,7 +77,7 @@ Initial capacity is 8, doubles on growth via `xrealloc()`. Lists can be nested (
 - `value_to_string(NULL)` → returns `"(null)"`
 - List ops on non-list values → return 0 / NULL gracefully
 - `value_equal()` with `NULL` arguments → `NULL == NULL` is true, otherwise false
-- Table clone → returns NIL placeholder (full implementation in 7.2)
+- Table clone/free fully wired into value_clone/value_free
 
 ### Testing
 
@@ -89,3 +89,96 @@ Initial capacity is 8, doubles on growth via `xrealloc()`. Lists can be nested (
 - Clone: deep copy verification (different pointers, equal values)
 - List: append, get, growth beyond initial capacity, nested lists, boundary checks
 - Free: NULL safety
+
+---
+
+## Table Type (7.2)
+
+### Design
+
+`Table` is a columnar data structure: named/typed columns with dynamically growing rows of `Value*` cells.
+
+```c
+typedef struct {
+    char *name;         // Column name (owned)
+    ValueType type;     // Hint for display alignment
+} Column;
+
+typedef struct {
+    Value **values;     // Array of col_count owned Value*
+    size_t count;
+} Row;
+
+struct Table {
+    Column *columns;
+    size_t col_count;
+    Row *rows;
+    size_t row_count;
+    size_t row_capacity;
+};
+```
+
+### Why this layout?
+
+- **Row-major storage** keeps related values together — good for sequential iteration (the common case in `where`, `select`, `sort` filters).
+- **Column metadata** (name + type) is separate from data — schema is defined once, rows just store values.
+- **Dynamic row array** starts at capacity 16, doubles on growth — amortized O(1) append.
+
+### Memory model
+
+- `table_new()` copies column names — caller retains ownership of the input arrays.
+- `table_add_row()` takes ownership of each `Value*` in the array (but NOT the array itself — it can be stack-allocated).
+- `table_get()` returns a borrowed pointer.
+- `table_free()` frees all rows, all cell values, column names, and the table itself.
+- `table_clone()` deep-copies everything including all cell values.
+
+### Pretty-printing
+
+`table_print()` outputs aligned columns with a Unicode separator:
+
+```
+ name   size  type
+─────────────────────
+ foo.c  1234  file
+ bar/    256  dir
+```
+
+Algorithm:
+1. Measure max width per column (header name vs cell content)
+2. Print header with padding (left-align strings, right-align INT/FLOAT)
+3. Print `─` (U+2500) separator spanning full width
+4. Print data rows with same alignment
+
+NIL cells render as empty strings (not "nil").
+
+### API
+
+| Function | Description |
+|----------|-------------|
+| `table_new(names, types, n)` | Create table with column schema |
+| `table_free(t)` | Free table and all contents |
+| `table_clone(t)` | Deep copy |
+| `table_add_row(t, values, n)` | Append row (ownership of values transferred) |
+| `table_get(t, row, col)` | Borrowed pointer to cell |
+| `table_print(t, out)` | Pretty-print to FILE* |
+| `table_row_count(t)` | Number of rows |
+| `table_col_count(t)` | Number of columns |
+| `table_col_index(t, name)` | Find column by name (-1 if not found) |
+
+### Integration with Value
+
+- `value_table(Table *t)` constructor takes ownership of the table.
+- `value_free()` calls `table_free()` for `VALUE_TABLE`.
+- `value_clone()` calls `table_clone()` for `VALUE_TABLE`.
+
+### Testing
+
+61 assertions covering:
+- Construction: basic, zero columns (returns NULL), column name copying
+- Add row: basic, column count mismatch rejection, growth beyond initial capacity
+- Get: basic cell access, out-of-bounds returns NULL
+- Column index: found, not found, NULL inputs
+- Clone: deep copy verification, NULL, empty table
+- Free: NULL safety
+- Print: header/data presence, separator character, right-alignment of numbers, NIL cells as empty
+- Value wrapper: constructor, clone integration

@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 7 — Structured Data Pipes (Novel Feature)
-**Last completed feature**: 7.1 Value type
+**Last completed feature**: 7.2 Table type
 
 ---
 
@@ -222,7 +222,7 @@ splash/
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
 | 7.1 | `Value` type | Tagged union: `STRING`, `INT`, `FLOAT`, `BOOL`, `NIL`, `TABLE`, `LIST`. Constructor/destructor functions. | `DONE` | 2026-03-17 | 78 test assertions, includes ValueList with nested support |
-| 7.2 | `Table` type | Column names + types, row storage. Pretty-print with aligned columns and header separators. | `TODO` | | |
+| 7.2 | `Table` type | Column names + types, row storage. Pretty-print with aligned columns and header separators. | `DONE` | 2026-03-17 | 61 test assertions, Unicode box-drawing separator, right-aligned numbers |
 | 7.3 | `\|>` operator | Tokenizer and parser recognize `\|>` as distinct from `\|`. | `TODO` | | |
 | 7.4 | Lazy iterator protocol | Each stage implements `next()` → `Value` or `NIL`. Upstream only called when downstream pulls. | `TODO` | | |
 | 7.5 | Auto-serialize | `\|>` into external command → render table as text (column-aligned). | `TODO` | | |

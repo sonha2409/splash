@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "table.h"
 #include "util.h"
 
 #define VALUE_LIST_INITIAL_CAP 8
@@ -52,6 +53,13 @@ Value *value_list(void) {
     return v;
 }
 
+Value *value_table(Table *t) {
+    Value *v = xmalloc(sizeof(Value));
+    v->type = VALUE_TABLE;
+    v->table = t;
+    return v;
+}
+
 
 void value_free(Value *v) {
     if (!v) {
@@ -68,8 +76,7 @@ void value_free(Value *v) {
         free(v->list.items);
         break;
     case VALUE_TABLE:
-        // table_free() will be implemented in 7.2
-        // For now, table pointer is not freed here
+        table_free(v->table);
         break;
     case VALUE_INT:
     case VALUE_FLOAT:
@@ -104,9 +111,7 @@ Value *value_clone(const Value *v) {
         return clone;
     }
     case VALUE_TABLE:
-        // table_clone() will be implemented in 7.2
-        // For now, return NIL as placeholder
-        return value_nil();
+        return value_table(table_clone(v->table));
     }
     return value_nil();
 }

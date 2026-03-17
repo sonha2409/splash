@@ -47,6 +47,7 @@ Value *value_float(double f);
 Value *value_bool(bool b);
 Value *value_nil(void);
 Value *value_list(void);
+Value *value_table(Table *t);  // Takes ownership of the Table
 
 // Destructor — recursively frees the value and all owned data.
 void value_free(Value *v);
