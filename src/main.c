@@ -3,12 +3,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "editor.h"
 #include "executor.h"
 #include "history.h"
 #include "jobs.h"
 #include "signals.h"
-
-#define MAX_INPUT_LINE 4096
 
 // Source a config file if it exists and is readable.
 static void source_if_exists(const char *path) {
@@ -20,7 +19,6 @@ static void source_if_exists(const char *path) {
 }
 
 int main(void) {
-    char line[MAX_INPUT_LINE];
     int last_status = 0;
     int interactive = isatty(STDIN_FILENO);
 
@@ -41,6 +39,11 @@ int main(void) {
     jobs_init();
     history_init();
 
+    // Initialize line editor (saves terminal state, registers atexit)
+    if (interactive) {
+        editor_init();
+    }
+
     // Auto-source config files (interactive only)
     if (interactive) {
         const char *home = getenv("HOME");
@@ -57,33 +60,27 @@ int main(void) {
         if (interactive) {
             // Notify about completed background jobs
             jobs_notify();
-
-            printf("splash> ");
-            fflush(stdout);
         }
 
-        if (!fgets(line, sizeof(line), stdin)) {
+        char *line = editor_readline("splash> ");
+        if (!line) {
             if (interactive) {
-                printf("\nViszontlátásra!!\n");
+                // Write newline since we're in raw mode
+                printf("Viszontlátásra!!\n");
                 printf("Jó egészséget és sok szerencsét kívánok!\n");
             }
             break;
         }
 
-        // Strip trailing newline
-        size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n') {
-            line[len - 1] = '\0';
-            len--;
-        }
-
         // Skip empty lines
-        if (len == 0) {
+        if (line[0] == '\0') {
+            free(line);
             continue;
         }
 
         history_add(line);
         last_status = executor_execute_line(line);
+        free(line);
     }
 
     (void)last_status;

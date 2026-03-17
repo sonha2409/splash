@@ -25,8 +25,8 @@ This is a **living feature log**. Each feature row has a status column:
 After completing a feature, update its status to `DONE`, fill in the date, and add a note if anything notable happened (edge cases found, design changes, etc.). This way each new session knows exactly where we left off.
 
 **Last updated**: 2026-03-17
-**Current milestone**: Milestone 5 — Quoting, Escaping, and Expansions
-**Last completed feature**: 5.8 Command substitution
+**Current milestone**: Milestone 6 — Line Editor (Fish-style)
+**Last completed feature**: 6.1 Raw terminal mode
 
 ---
 
@@ -198,7 +198,7 @@ splash/
 
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
-| 6.1 | Raw terminal mode | Switch from canonical to raw mode via `termios`. Restore on exit/signal. | `TODO` | | |
+| 6.1 | Raw terminal mode | Switch from canonical to raw mode via `termios`. Restore on exit/signal. | `DONE` | 2026-03-17 | Per-line raw/cooked cycling; includes basic editing keys (6.2-6.4 partially covered) |
 | 6.2 | Basic character input | Echo typed characters, handle printable ASCII. | `TODO` | | |
 | 6.3 | Cursor movement | Left/Right arrows within line. Home (Ctrl-A) / End (Ctrl-E). | `TODO` | | |
 | 6.4 | Editing keys | Backspace, Delete (Ctrl-D), Ctrl-K (kill to end), Ctrl-U (kill to start), Ctrl-W (kill word back), Ctrl-Y (yank) | `TODO` | | |
