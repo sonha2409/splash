@@ -2,12 +2,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "command.h"
+#include "executor.h"
+#include "parser.h"
+#include "tokenizer.h"
 #include "util.h"
 
 #define MAX_INPUT_LINE 4096
 
 int main(void) {
     char line[MAX_INPUT_LINE];
+    int last_status = 0;
 
     for (;;) {
         printf("splash> ");
@@ -30,9 +35,19 @@ int main(void) {
             continue;
         }
 
-        // Placeholder: echo back the input until we have a tokenizer
-        printf("[debug] input: %s\n", line);
+        // Tokenize
+        TokenList *tokens = tokenizer_tokenize(line);
+
+        // Parse
+        Pipeline *pl = parser_parse(tokens);
+        if (pl) {
+            last_status = executor_execute(pl);
+            pipeline_free(pl);
+        }
+
+        token_list_free(tokens);
     }
 
+    (void)last_status;
     return 0;
 }
