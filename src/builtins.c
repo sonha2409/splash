@@ -777,9 +777,116 @@ static PipelineStage *create_ps_stage(void) {
 }
 
 
+// --- Structured find ---
+
+typedef struct {
+    int yielded;
+    char *path;
+} FindStageState;
+
+// Recursively walk a directory, adding rows to the table.
+static void find_walk(Table *t, const char *dir_path) {
+    DIR *dir = opendir(dir_path);
+    if (!dir) {
+        return; // Silently skip unreadable directories
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        size_t dir_len = strlen(dir_path);
+        size_t name_len = strlen(entry->d_name);
+        char *full = xmalloc(dir_len + 1 + name_len + 1);
+        memcpy(full, dir_path, dir_len);
+        full[dir_len] = '/';
+        memcpy(full + dir_len + 1, entry->d_name, name_len);
+        full[dir_len + 1 + name_len] = '\0';
+
+        struct stat st;
+        if (lstat(full, &st) == -1) {
+            free(full);
+            continue;
+        }
+
+        Value *row[] = {
+            value_string(full),
+            value_string(entry->d_name),
+            value_int(st.st_size),
+            value_string(file_type_string(st.st_mode))
+        };
+        table_add_row(t, row, 4);
+
+        // Recurse into subdirectories (but not symlinks to avoid loops)
+        if (S_ISDIR(st.st_mode)) {
+            find_walk(t, full);
+        }
+
+        free(full);
+    }
+    closedir(dir);
+}
+
+static Value *find_stage_next(PipelineStage *self) {
+    FindStageState *s = self->state;
+    if (s->yielded) {
+        return NULL;
+    }
+    s->yielded = 1;
+
+    const char *col_names[] = {"path", "name", "size", "type"};
+    ValueType col_types[] = {VALUE_STRING, VALUE_STRING, VALUE_INT, VALUE_STRING};
+    Table *t = table_new(col_names, col_types, 4);
+
+    struct stat root_st;
+    if (lstat(s->path, &root_st) == -1) {
+        fprintf(stderr, "splash: find: %s: %s\n", s->path, strerror(errno));
+        return value_table(t);
+    }
+
+    if (!S_ISDIR(root_st.st_mode)) {
+        // Single file
+        const char *basename = strrchr(s->path, '/');
+        basename = basename ? basename + 1 : s->path;
+        Value *row[] = {
+            value_string(s->path),
+            value_string(basename),
+            value_int(root_st.st_size),
+            value_string(file_type_string(root_st.st_mode))
+        };
+        table_add_row(t, row, 4);
+        return value_table(t);
+    }
+
+    find_walk(t, s->path);
+    return value_table(t);
+}
+
+static void find_stage_free(PipelineStage *self) {
+    FindStageState *s = self->state;
+    free(s->path);
+    free(s);
+}
+
+static PipelineStage *create_find_stage(SimpleCommand *cmd) {
+    const char *path = ".";
+    if (cmd->argc > 1) {
+        path = cmd->argv[1];
+    }
+    FindStageState *s = xmalloc(sizeof(FindStageState));
+    s->yielded = 0;
+    s->path = xstrdup(path);
+    return pipeline_stage_new(find_stage_next, find_stage_free, s, NULL);
+}
+
+
 int builtin_is_structured(const char *name) {
     return strcmp(name, "ls") == 0 ||
-           strcmp(name, "ps") == 0;
+           strcmp(name, "ps") == 0 ||
+           strcmp(name, "find") == 0;
 }
 
 PipelineStage *builtin_create_stage(SimpleCommand *cmd,
@@ -791,6 +898,9 @@ PipelineStage *builtin_create_stage(SimpleCommand *cmd,
     }
     if (strcmp(name, "ps") == 0) {
         return create_ps_stage();
+    }
+    if (strcmp(name, "find") == 0) {
+        return create_find_stage(cmd);
     }
     return NULL;
 }

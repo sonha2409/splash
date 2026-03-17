@@ -350,6 +350,33 @@ Processes where `proc_name()` fails (permission denied) are silently skipped —
 
 ---
 
+## Structured `find` (7.8)
+
+### Design
+
+Recursive directory walk producing a Table with 4 columns:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `path` | STRING | Full relative path |
+| `name` | STRING | Basename |
+| `size` | INT | Size in bytes |
+| `type` | STRING | `file`, `dir`, `symlink`, etc. |
+
+### Implementation
+
+- `find_walk()` recursively descends using `opendir()`/`readdir()`/`lstat()`
+- Skips `.` and `..`, includes dotfiles
+- Only recurses into real directories (not symlinks) to avoid infinite loops
+- Unreadable directories are silently skipped
+- Single file argument produces a 1-row table
+
+### Testing
+
+18 integration test assertions covering recursive discovery, types, full paths, dotfiles, single file, nonexistent path, and `|>` auto-serialize.
+
+---
+
 ## Auto-serialize (7.5)
 
 ### Design

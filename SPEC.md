@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 7 — Structured Data Pipes (Novel Feature)
-**Last completed feature**: 7.7 Built-in ps (structured)
+**Last completed feature**: 7.8 Built-in find (structured)
 
 ---
 
@@ -228,7 +228,7 @@ splash/
 | 7.5 | Auto-serialize | `\|>` into external command → render table as text (column-aligned). | `DONE` | 2026-03-17 | drain_to_fd + executor bridge; graceful fallback when no structured source |
 | 7.6 | Built-in `ls` (structured) | Table: `name`, `size`, `permissions`, `modified`, `type`. Uses `stat()` + `readdir()`. | `DONE` | 2026-03-17 | lstat for symlinks, skips ./.. shows dotfiles, single-file support, |> auto-serialize works |
 | 7.7 | Built-in `ps` (structured) | Table: `pid`, `name`, `cpu_time`, `mem`, `status`. Uses `libproc` on macOS. | `DONE` | 2026-03-17 | cpu_time (total seconds) instead of cpu%, proc_listallpids + proc_pidinfo |
-| 7.8 | Built-in `find` (structured) | Table: `path`, `name`, `size`, `type`. Recursive directory walk. | `TODO` | | |
+| 7.8 | Built-in `find` (structured) | Table: `path`, `name`, `size`, `type`. Recursive directory walk. | `DONE` | 2026-03-17 | lstat-based, skips symlink dirs to avoid loops, dotfiles included |
 | 7.9 | Built-in `env` (structured) | Table: `key`, `value` from environment. | `TODO` | | |
 | 7.10 | `where` filter | `where <col> <op> <val>`. Ops: `==`, `!=`, `>`, `<`, `>=`, `<=`, `=~` (regex). | `TODO` | | |
 | 7.11 | `sort` filter | `sort <col>`. Ascending default, `--desc` flag. | `TODO` | | |
