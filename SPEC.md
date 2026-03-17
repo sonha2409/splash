@@ -25,7 +25,7 @@ This is a **living feature log**. Each feature row has a status column:
 After completing a feature, update its status to `DONE`, fill in the date, and add a note if anything notable happened (edge cases found, design changes, etc.). This way each new session knows exactly where we left off.
 
 **Last updated**: 2026-03-17
-**Current milestone**: Milestone 4 — Builtins and Environment
+**Current milestone**: Milestone 5 — Quoting, Escaping, and Expansions
 **Last completed feature**: 4.11 Auto-source config
 
 ---
