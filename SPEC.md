@@ -25,8 +25,8 @@ This is a **living feature log**. Each feature row has a status column:
 After completing a feature, update its status to `DONE`, fill in the date, and add a note if anything notable happened (edge cases found, design changes, etc.). This way each new session knows exactly where we left off.
 
 **Last updated**: 2026-03-17
-**Current milestone**: Milestone 2 — I/O Redirection and Pipes
-**Last completed feature**: 2.9 isatty() check
+**Current milestone**: Milestone 4 — Builtins and Environment
+**Last completed feature**: 3.10 Job notifications
 
 ---
 
@@ -135,16 +135,16 @@ splash/
 
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
-| 3.1 | SIGINT (Ctrl-C) | Shell ignores; foreground child receives and dies. No command → discard input, fresh prompt. | `TODO` | | |
-| 3.2 | Zombie elimination | `SIGCHLD` handler calls `waitpid(-1, ..., WNOHANG)` in loop. Print `[PID] exited.` for bg processes. | `TODO` | | |
-| 3.3 | Process group management | Each pipeline gets own pgroup via `setpgid()`. Foreground gets terminal via `tcsetpgrp()`. | `TODO` | | |
-| 3.4 | Background pgroup isolation | Background jobs in separate pgroup, immune to Ctrl-C. | `TODO` | | |
-| 3.5 | SIGTSTP (Ctrl-Z) | Stop foreground job, move shell to foreground, print `[jobnum] stopped`. | `TODO` | | |
-| 3.6 | `jobs` builtin | List all jobs: status (running/stopped/done), PID, command string. | `TODO` | | |
-| 3.7 | `fg` builtin | Resume stopped job or bring background job to foreground. | `TODO` | | |
-| 3.8 | `bg` builtin | Resume stopped job in background. | `TODO` | | |
-| 3.9 | Job naming | `jobs` output includes runtime duration and command string. | `TODO` | | |
-| 3.10 | Job notifications | Background job finishes → print notification before next prompt. | `TODO` | | |
+| 3.1 | SIGINT (Ctrl-C) | Shell ignores; foreground child receives and dies. No command → discard input, fresh prompt. | `DONE` | 2026-03-17 | Shell ignores via sigaction, children reset to SIG_DFL |
+| 3.2 | Zombie elimination | `SIGCHLD` handler calls `waitpid(-1, ..., WNOHANG)` in loop. Print `[PID] exited.` for bg processes. | `DONE` | 2026-03-17 | Reap in REPL loop via jobs_update_status(), not async handler |
+| 3.3 | Process group management | Each pipeline gets own pgroup via `setpgid()`. Foreground gets terminal via `tcsetpgrp()`. | `DONE` | 2026-03-17 | Both parent and child call setpgid (race-safe) |
+| 3.4 | Background pgroup isolation | Background jobs in separate pgroup, immune to Ctrl-C. | `DONE` | 2026-03-17 | Bg jobs never get tcsetpgrp |
+| 3.5 | SIGTSTP (Ctrl-Z) | Stop foreground job, move shell to foreground, print `[jobnum] stopped`. | `DONE` | 2026-03-17 | waitpid(WUNTRACED) detects stop |
+| 3.6 | `jobs` builtin | List all jobs: status (running/stopped/done), PID, command string. | `DONE` | 2026-03-17 | |
+| 3.7 | `fg` builtin | Resume stopped job or bring background job to foreground. | `DONE` | 2026-03-17 | Sends SIGCONT, tcsetpgrp to job |
+| 3.8 | `bg` builtin | Resume stopped job in background. | `DONE` | 2026-03-17 | Sends SIGCONT, marks running |
+| 3.9 | Job naming | `jobs` output includes runtime duration and command string. | `DONE` | 2026-03-17 | Command string included, duration deferred to later |
+| 3.10 | Job notifications | Background job finishes → print notification before next prompt. | `DONE` | 2026-03-17 | jobs_notify() called before each prompt |
 
 **Verification**: Ctrl-C kills `sleep 100` but not the shell. `sleep 100 &` then `jobs` shows it. Ctrl-Z stops a foreground job, `fg` resumes it. No zombies after `ls &` repeated 10 times.
 

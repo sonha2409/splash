@@ -1,13 +1,17 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "builtins.h"
 #include "command.h"
 #include "executor.h"
+#include "jobs.h"
+#include "signals.h"
 #include "util.h"
 
 // Apply all redirections for a command. Called in child process before exec.
@@ -93,77 +97,43 @@ static int apply_redirections(SimpleCommand *cmd) {
     return 0;
 }
 
-// Execute a single command (no pipes).
-static int execute_single(SimpleCommand *cmd, int background) {
-    pid_t pid = fork();
-    if (pid < 0) {
-        fprintf(stderr, "splash: fork: %s\n", strerror(errno));
-        return -1;
-    }
-
-    if (pid == 0) {
-        // Child: apply redirections, then exec
-        if (apply_redirections(cmd) == -1) {
-            _exit(1);
-        }
-        execvp(cmd->argv[0], cmd->argv);
-        fprintf(stderr, "splash: %s: %s\n", cmd->argv[0], strerror(errno));
-        _exit(127);
-    }
-
-    // Parent
-    if (background) {
-        printf("[%d]\n", pid);
-        return 0;
-    }
-
-    int status;
-    if (waitpid(pid, &status, 0) == -1) {
-        fprintf(stderr, "splash: waitpid: %s\n", strerror(errno));
-        return -1;
-    }
-
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
-    if (WIFSIGNALED(status)) {
-        return 128 + WTERMSIG(status);
-    }
-    return -1;
-}
-
-// Execute a multi-stage pipeline.
-static int execute_pipeline(Pipeline *pl) {
+// Execute a pipeline (single or multi-stage).
+// Sets up process groups, job table entries, and waits for foreground jobs.
+static int execute_pipeline_impl(Pipeline *pl, const char *command_str) {
     int n = pl->num_commands;
+    int interactive = isatty(STDIN_FILENO);
+    int (*pipes)[2] = NULL;
+    pid_t *pids = xmalloc(sizeof(pid_t) * (size_t)n);
+    pid_t pgid = 0;
 
-    // Allocate pipe file descriptors: (n-1) pipes, each with 2 fds
-    int (*pipes)[2] = xmalloc(sizeof(int[2]) * (size_t)(n - 1));
-
-    // Create all pipes
-    for (int i = 0; i < n - 1; i++) {
-        if (pipe(pipes[i]) == -1) {
-            fprintf(stderr, "splash: pipe: %s\n", strerror(errno));
-            // Close any already-created pipes
-            for (int j = 0; j < i; j++) {
-                close(pipes[j][0]);
-                close(pipes[j][1]);
+    // Create pipes for multi-stage pipelines
+    if (n > 1) {
+        pipes = xmalloc(sizeof(int[2]) * (size_t)(n - 1));
+        for (int i = 0; i < n - 1; i++) {
+            if (pipe(pipes[i]) == -1) {
+                fprintf(stderr, "splash: pipe: %s\n", strerror(errno));
+                for (int j = 0; j < i; j++) {
+                    close(pipes[j][0]);
+                    close(pipes[j][1]);
+                }
+                free(pipes);
+                free(pids);
+                return -1;
             }
-            free(pipes);
-            return -1;
         }
     }
 
     // Fork each command
-    pid_t *pids = xmalloc(sizeof(pid_t) * (size_t)n);
-
     for (int i = 0; i < n; i++) {
         pids[i] = fork();
         if (pids[i] < 0) {
             fprintf(stderr, "splash: fork: %s\n", strerror(errno));
             // Close all pipe fds
-            for (int j = 0; j < n - 1; j++) {
-                close(pipes[j][0]);
-                close(pipes[j][1]);
+            if (pipes) {
+                for (int j = 0; j < n - 1; j++) {
+                    close(pipes[j][0]);
+                    close(pipes[j][1]);
+                }
             }
             // Wait for any already-forked children
             for (int j = 0; j < i; j++) {
@@ -177,31 +147,38 @@ static int execute_pipeline(Pipeline *pl) {
         if (pids[i] == 0) {
             // Child process
 
-            // Wire stdin from previous pipe (except first command)
-            if (i > 0) {
-                if (dup2(pipes[i - 1][0], STDIN_FILENO) == -1) {
-                    fprintf(stderr, "splash: dup2 stdin: %s\n",
-                            strerror(errno));
-                    _exit(1);
+            // Set process group: first child creates, others join
+            if (interactive) {
+                pid_t child_pgid = (i == 0) ? 0 : pgid;
+                setpgid(0, child_pgid);
+            }
+
+            // Reset signals to default before exec
+            signals_default();
+
+            // Wire pipes for multi-stage
+            if (pipes) {
+                if (i > 0) {
+                    if (dup2(pipes[i - 1][0], STDIN_FILENO) == -1) {
+                        fprintf(stderr, "splash: dup2 stdin: %s\n",
+                                strerror(errno));
+                        _exit(1);
+                    }
+                }
+                if (i < n - 1) {
+                    if (dup2(pipes[i][1], STDOUT_FILENO) == -1) {
+                        fprintf(stderr, "splash: dup2 stdout: %s\n",
+                                strerror(errno));
+                        _exit(1);
+                    }
+                }
+                for (int j = 0; j < n - 1; j++) {
+                    close(pipes[j][0]);
+                    close(pipes[j][1]);
                 }
             }
 
-            // Wire stdout to next pipe (except last command)
-            if (i < n - 1) {
-                if (dup2(pipes[i][1], STDOUT_FILENO) == -1) {
-                    fprintf(stderr, "splash: dup2 stdout: %s\n",
-                            strerror(errno));
-                    _exit(1);
-                }
-            }
-
-            // Close all pipe fds in child
-            for (int j = 0; j < n - 1; j++) {
-                close(pipes[j][0]);
-                close(pipes[j][1]);
-            }
-
-            // Apply per-command redirections (after pipe wiring)
+            // Apply per-command redirections
             if (apply_redirections(pl->commands[i]) == -1) {
                 _exit(1);
             }
@@ -211,26 +188,62 @@ static int execute_pipeline(Pipeline *pl) {
                     pl->commands[i]->argv[0], strerror(errno));
             _exit(127);
         }
+
+        // Parent: set process group (race-safe — both parent and child call setpgid)
+        if (i == 0) {
+            pgid = pids[0];
+        }
+        if (interactive) {
+            setpgid(pids[i], pgid);
+        }
     }
 
     // Parent: close all pipe fds
-    for (int i = 0; i < n - 1; i++) {
-        close(pipes[i][0]);
-        close(pipes[i][1]);
+    if (pipes) {
+        for (int i = 0; i < n - 1; i++) {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
+        }
+        free(pipes);
     }
 
-    // Wait for all children
-    int last_status = 0;
+    // Add to job table
+    int job_id = jobs_add(pgid, pids, n, command_str, pl->background);
+
     if (pl->background) {
-        printf("[%d]\n", pids[n - 1]);
-    } else {
-        for (int i = 0; i < n; i++) {
-            int status;
-            if (waitpid(pids[i], &status, 0) == -1) {
-                fprintf(stderr, "splash: waitpid: %s\n", strerror(errno));
-                continue;
+        printf("[%d] %d\n", job_id, pgid);
+        free(pids);
+        return 0;
+    }
+
+    // Foreground: give the job the terminal and wait
+    if (interactive) {
+        tcsetpgrp(STDIN_FILENO, pgid);
+    }
+
+    int last_status = 0;
+    for (int i = 0; i < n; i++) {
+        int status;
+        pid_t result;
+        do {
+            result = waitpid(pids[i], &status, WUNTRACED);
+        } while (result == -1 && errno == EINTR);
+
+        if (result > 0) {
+            if (WIFSTOPPED(status)) {
+                // Job was stopped (Ctrl-Z)
+                Job *j = jobs_find_by_id(job_id);
+                if (j) {
+                    j->status = JOB_STOPPED;
+                    fprintf(stderr, "\n[%d] stopped\t%s\n", j->id, j->command);
+                }
+                // Reclaim terminal
+                if (interactive) {
+                    tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid());
+                }
+                free(pids);
+                return 128 + WSTOPSIG(status);
             }
-            // Return status of last command
             if (i == n - 1) {
                 if (WIFEXITED(status)) {
                     last_status = WEXITSTATUS(status);
@@ -241,19 +254,30 @@ static int execute_pipeline(Pipeline *pl) {
         }
     }
 
-    free(pipes);
+    // Reclaim terminal for shell
+    if (interactive) {
+        tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid());
+    }
+
+    // Remove completed foreground job
+    jobs_remove(job_id);
+
     free(pids);
     return last_status;
 }
 
-int executor_execute(Pipeline *pl) {
+int executor_execute(Pipeline *pl, const char *command_str) {
     if (!pl || pl->num_commands == 0) {
         return 0;
     }
 
-    if (pl->num_commands == 1) {
-        return execute_single(pl->commands[0], pl->background);
+    // Check for builtins (single command, non-pipeline only)
+    if (pl->num_commands == 1 && !pl->background) {
+        SimpleCommand *cmd = pl->commands[0];
+        if (builtin_is_builtin(cmd->argv[0])) {
+            return builtin_execute(cmd);
+        }
     }
 
-    return execute_pipeline(pl);
+    return execute_pipeline_impl(pl, command_str);
 }

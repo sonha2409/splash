@@ -5,7 +5,9 @@
 
 #include "command.h"
 #include "executor.h"
+#include "jobs.h"
 #include "parser.h"
+#include "signals.h"
 #include "tokenizer.h"
 #include "util.h"
 
@@ -16,8 +18,27 @@ int main(void) {
     int last_status = 0;
     int interactive = isatty(STDIN_FILENO);
 
+    // Shell takes control of the terminal
+    if (interactive) {
+        // Put shell in its own process group
+        pid_t shell_pgid = getpid();
+        if (setpgid(shell_pgid, shell_pgid) == -1) {
+            // May already be group leader — not an error
+        }
+        jobs_set_shell_pgid(shell_pgid);
+        tcsetpgrp(STDIN_FILENO, shell_pgid);
+
+        // Set up signal handlers
+        signals_init();
+    }
+
+    jobs_init();
+
     for (;;) {
         if (interactive) {
+            // Notify about completed background jobs
+            jobs_notify();
+
             printf("splash> ");
             fflush(stdout);
         }
@@ -47,7 +68,7 @@ int main(void) {
         // Parse
         Pipeline *pl = parser_parse(tokens);
         if (pl) {
-            last_status = executor_execute(pl);
+            last_status = executor_execute(pl, line);
             pipeline_free(pl);
         }
 
