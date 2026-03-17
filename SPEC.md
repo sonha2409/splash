@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 4 — Builtins and Environment
-**Last completed feature**: 3.10 Job notifications
+**Last completed feature**: 4.6 export
 
 ---
 
@@ -156,12 +156,12 @@ splash/
 
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
-| 4.1 | `exit` | Print "Good bye!!" and exit. No `fork()`. Return shell's exit code. | `TODO` | | |
-| 4.2 | `cd` | `chdir()`. No arg = `$HOME`. `cd -` = previous dir. Update `$PWD` and `$OLDPWD`. | `TODO` | | |
-| 4.3 | `printenv` | Print all env vars (iterate `environ`). | `TODO` | | |
-| 4.4 | `setenv VAR VALUE` | `setenv()` call. | `TODO` | | |
-| 4.5 | `unsetenv VAR` | `unsetenv()` call. | `TODO` | | |
-| 4.6 | `export VAR=VALUE` | Like `setenv` but POSIX-style syntax. | `TODO` | | |
+| 4.1 | `exit` | Print "Good bye!!" and exit. No `fork()`. Return shell's exit code. | `DONE` | 2026-03-17 | Implemented in M3, Hungarian goodbye |
+| 4.2 | `cd` | `chdir()`. No arg = `$HOME`. `cd -` = previous dir. Update `$PWD` and `$OLDPWD`. | `DONE` | 2026-03-17 | Implemented in M3 |
+| 4.3 | `printenv` | Print all env vars (iterate `environ`). | `DONE` | 2026-03-17 | Also supports `printenv VAR` for single var |
+| 4.4 | `setenv VAR VALUE` | `setenv()` call. | `DONE` | 2026-03-17 | |
+| 4.5 | `unsetenv VAR` | `unsetenv()` call. | `DONE` | 2026-03-17 | |
+| 4.6 | `export VAR=VALUE` | Like `setenv` but POSIX-style syntax. | `DONE` | 2026-03-17 | No-arg lists all, multi-arg supported |
 | 4.7 | `source <file>` | Read file line by line, feed each line to parser/executor as if typed. | `TODO` | | |
 | 4.8 | `alias` / `unalias` | Store aliases, expand before execution. Syntax: `alias name='command'`. | `TODO` | | |
 | 4.9 | `type` / `which` | Print whether cmd is builtin, alias, or external (and its PATH). | `TODO` | | |

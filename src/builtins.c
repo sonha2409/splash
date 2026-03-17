@@ -8,6 +8,9 @@
 
 #include "builtins.h"
 #include "jobs.h"
+#include "util.h"
+
+extern char **environ;
 
 // exit [status]
 static int builtin_exit(SimpleCommand *cmd) {
@@ -209,22 +212,101 @@ static int builtin_bg(SimpleCommand *cmd) {
     return 0;
 }
 
+// printenv [VAR]
+static int builtin_printenv(SimpleCommand *cmd) {
+    if (cmd->argc > 1) {
+        const char *val = getenv(cmd->argv[1]);
+        if (val) {
+            printf("%s\n", val);
+            return 0;
+        }
+        return 1;
+    }
+    for (char **env = environ; *env; env++) {
+        printf("%s\n", *env);
+    }
+    return 0;
+}
+
+// setenv VAR VALUE
+static int builtin_setenv(SimpleCommand *cmd) {
+    if (cmd->argc != 3) {
+        fprintf(stderr, "splash: setenv: usage: setenv VAR VALUE\n");
+        return 1;
+    }
+    if (setenv(cmd->argv[1], cmd->argv[2], 1) == -1) {
+        fprintf(stderr, "splash: setenv: %s\n", strerror(errno));
+        return 1;
+    }
+    return 0;
+}
+
+// unsetenv VAR
+static int builtin_unsetenv(SimpleCommand *cmd) {
+    if (cmd->argc != 2) {
+        fprintf(stderr, "splash: unsetenv: usage: unsetenv VAR\n");
+        return 1;
+    }
+    if (unsetenv(cmd->argv[1]) == -1) {
+        fprintf(stderr, "splash: unsetenv: %s\n", strerror(errno));
+        return 1;
+    }
+    return 0;
+}
+
+// export VAR=VALUE or export VAR
+static int builtin_export(SimpleCommand *cmd) {
+    if (cmd->argc < 2) {
+        // No args: print all exported vars (same as printenv)
+        for (char **env = environ; *env; env++) {
+            printf("export %s\n", *env);
+        }
+        return 0;
+    }
+    for (int i = 1; i < cmd->argc; i++) {
+        char *eq = strchr(cmd->argv[i], '=');
+        if (eq) {
+            // export VAR=VALUE
+            size_t name_len = (size_t)(eq - cmd->argv[i]);
+            char *name = xmalloc(name_len + 1);
+            memcpy(name, cmd->argv[i], name_len);
+            name[name_len] = '\0';
+            if (setenv(name, eq + 1, 1) == -1) {
+                fprintf(stderr, "splash: export: %s\n", strerror(errno));
+                free(name);
+                return 1;
+            }
+            free(name);
+        }
+        // export VAR (no =) — no-op, var is already in env if it exists
+    }
+    return 0;
+}
+
 int builtin_is_builtin(const char *name) {
     return strcmp(name, "exit") == 0 ||
            strcmp(name, "cd") == 0 ||
            strcmp(name, "jobs") == 0 ||
            strcmp(name, "fg") == 0 ||
-           strcmp(name, "bg") == 0;
+           strcmp(name, "bg") == 0 ||
+           strcmp(name, "printenv") == 0 ||
+           strcmp(name, "setenv") == 0 ||
+           strcmp(name, "unsetenv") == 0 ||
+           strcmp(name, "export") == 0;
 }
 
 int builtin_execute(SimpleCommand *cmd) {
     const char *name = cmd->argv[0];
 
-    if (strcmp(name, "exit") == 0) return builtin_exit(cmd);
-    if (strcmp(name, "cd") == 0)   return builtin_cd(cmd);
-    if (strcmp(name, "jobs") == 0) return builtin_jobs();
-    if (strcmp(name, "fg") == 0)   return builtin_fg(cmd);
-    if (strcmp(name, "bg") == 0)   return builtin_bg(cmd);
+    if (strcmp(name, "exit") == 0)     return builtin_exit(cmd);
+    if (strcmp(name, "cd") == 0)       return builtin_cd(cmd);
+    if (strcmp(name, "jobs") == 0)     return builtin_jobs();
+    if (strcmp(name, "fg") == 0)       return builtin_fg(cmd);
+    if (strcmp(name, "bg") == 0)       return builtin_bg(cmd);
+    if (strcmp(name, "printenv") == 0) return builtin_printenv(cmd);
+    if (strcmp(name, "setenv") == 0)   return builtin_setenv(cmd);
+    if (strcmp(name, "unsetenv") == 0) return builtin_unsetenv(cmd);
+    if (strcmp(name, "export") == 0)   return builtin_export(cmd);
 
     fprintf(stderr, "splash: %s: unknown builtin\n", name);
     return 1;
