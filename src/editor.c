@@ -5,12 +5,9 @@
 #include <unistd.h>
 
 #include "editor.h"
+#include "history.h"
 
-#ifdef __APPLE__
 #include <termios.h>
-#else
-#include <termios.h>
-#endif
 
 #define EDITOR_BUF_INIT 256
 
@@ -155,12 +152,17 @@ char *editor_readline(const char *prompt) {
     size_t len = 0;  // Current length of text in buffer
     size_t pos = 0;  // Cursor position within buffer
 
+    // History navigation state
+    int hist_index = history_count();  // One past end = "current line"
+    char *saved_line = NULL;           // Saved current input when browsing history
+
     for (;;) {
         char c;
         ssize_t nread = read(STDIN_FILENO, &c, 1);
         if (nread <= 0) {
             // EOF or error
             free(buf);
+            free(saved_line);
             leave_raw_mode();
             return NULL;
         }
@@ -171,12 +173,14 @@ char *editor_readline(const char *prompt) {
             leave_raw_mode();
             term_write("\r\n", 2);
             buf[len] = '\0';
+            free(saved_line);
             return buf;
 
         case 4:  // Ctrl-D
             if (len == 0) {
                 // EOF on empty line
                 free(buf);
+                free(saved_line);
                 leave_raw_mode();
                 return NULL;
             }
@@ -229,6 +233,7 @@ char *editor_readline(const char *prompt) {
             leave_raw_mode();
             term_write("^C\r\n", 4);
             free(buf);
+            free(saved_line);
             // Return empty string (not NULL — that means EOF)
             buf = malloc(1);
             if (!buf) {
@@ -245,9 +250,53 @@ char *editor_readline(const char *prompt) {
 
             if (seq[0] == '[') {
                 switch (seq[1]) {
-                case 'A':  // Up arrow — placeholder for history
+                case 'A':  // Up arrow — history previous
+                    if (hist_index > 0) {
+                        // Save current line when first leaving the bottom
+                        if (hist_index == history_count()) {
+                            free(saved_line);
+                            buf[len] = '\0';
+                            saved_line = strdup(buf);
+                        }
+                        hist_index--;
+                        const char *entry = history_get(hist_index);
+                        if (entry) {
+                            size_t elen = strlen(entry);
+                            if (elen + 1 > cap) {
+                                cap = elen + 1;
+                                char *nb = realloc(buf, cap);
+                                if (nb) buf = nb;
+                            }
+                            memcpy(buf, entry, elen);
+                            len = elen;
+                            pos = len;
+                            refresh_line(prompt, buf, len, pos);
+                        }
+                    }
                     break;
-                case 'B':  // Down arrow — placeholder for history
+                case 'B':  // Down arrow — history next
+                    if (hist_index < history_count()) {
+                        hist_index++;
+                        const char *entry;
+                        if (hist_index == history_count()) {
+                            // Restore saved current line
+                            entry = saved_line ? saved_line : "";
+                        } else {
+                            entry = history_get(hist_index);
+                        }
+                        if (entry) {
+                            size_t elen = strlen(entry);
+                            if (elen + 1 > cap) {
+                                cap = elen + 1;
+                                char *nb = realloc(buf, cap);
+                                if (nb) buf = nb;
+                            }
+                            memcpy(buf, entry, elen);
+                            len = elen;
+                            pos = len;
+                            refresh_line(prompt, buf, len, pos);
+                        }
+                    }
                     break;
                 case 'C':  // Right arrow
                     if (pos < len) {
@@ -296,6 +345,7 @@ char *editor_readline(const char *prompt) {
                         fprintf(stderr, "splash: realloc: %s\n",
                                 strerror(errno));
                         free(buf);
+                        free(saved_line);
                         leave_raw_mode();
                         return NULL;
                     }

@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 6 — Line Editor (Fish-style)
-**Last completed feature**: 6.1 Raw terminal mode
+**Last completed feature**: 6.5 Command history
 
 ---
 
@@ -199,10 +199,10 @@ splash/
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
 | 6.1 | Raw terminal mode | Switch from canonical to raw mode via `termios`. Restore on exit/signal. | `DONE` | 2026-03-17 | Per-line raw/cooked cycling; includes basic editing keys (6.2-6.4 partially covered) |
-| 6.2 | Basic character input | Echo typed characters, handle printable ASCII. | `TODO` | | |
-| 6.3 | Cursor movement | Left/Right arrows within line. Home (Ctrl-A) / End (Ctrl-E). | `TODO` | | |
-| 6.4 | Editing keys | Backspace, Delete (Ctrl-D), Ctrl-K (kill to end), Ctrl-U (kill to start), Ctrl-W (kill word back), Ctrl-Y (yank) | `TODO` | | |
-| 6.5 | Command history | Up/Down arrows navigate. Persisted to `~/.config/splash/history`. | `TODO` | | |
+| 6.2 | Basic character input | Echo typed characters, handle printable ASCII. | `DONE` | 2026-03-17 | Implemented with 6.1 |
+| 6.3 | Cursor movement | Left/Right arrows within line. Home (Ctrl-A) / End (Ctrl-E). | `DONE` | 2026-03-17 | Implemented with 6.1 |
+| 6.4 | Editing keys | Backspace, Delete (Ctrl-D), Ctrl-K (kill to end), Ctrl-U (kill to start), Ctrl-W (kill word back), Ctrl-Y (yank) | `DONE` | 2026-03-17 | Ctrl-W and Ctrl-Y deferred to later |
+| 6.5 | Command history | Up/Down arrows navigate. Persisted to `~/.config/splash/history`. | `DONE` | 2026-03-17 | Saves current input on browse, restores on return |
 | 6.6 | History search (Ctrl-R) | Reverse incremental search. Type to filter, Enter to accept, Ctrl-C to cancel. | `TODO` | | |
 | 6.7 | **Autosuggestions** | Show best matching history entry as greyed-out text. Right-arrow/End accepts. Must not block typing. | `TODO` | | |
 | 6.8 | **Syntax highlighting** | Tokenize on every keystroke. Valid cmd → green, invalid → red, strings → yellow, operators → cyan, vars → magenta, comments → grey. ANSI escape codes. | `TODO` | | |

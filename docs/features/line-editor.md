@@ -87,10 +87,35 @@ When stdin is not a TTY (piped input, scripts), `editor_readline()` falls back t
 - All existing unit tests pass (no regressions).
 - Builds clean under `-fsanitize=address,undefined`.
 
+## History Navigation (6.5)
+
+### Design
+
+Up/Down arrows browse command history. The editor tracks a `hist_index` that starts at `history_count()` (one past the end, representing "current input"). Up decrements, Down increments.
+
+When the user first presses Up, the current typed text is saved in `saved_line`. Pressing Down back to the bottom restores it. This matches bash/zsh behavior.
+
+### Persistent History
+
+History is persisted to `~/.config/splash/history` (one command per line). The directory is created automatically if missing.
+
+- `history_load()`: Called during `history_init()`. Reads the file line by line.
+- `history_append()`: Called from `history_add()`. Appends a single line (avoids rewriting the whole file).
+- Dedup: consecutive duplicates are skipped both in-memory and on disk.
+- Max entries: 1000. When full, oldest entries are dropped from memory (file grows unbounded but is only loaded up to HISTORY_MAX on startup).
+
+### Edge Cases
+
+- No history file → start fresh, no error.
+- `$HOME` not set → persistence disabled, in-memory history still works.
+- Up at top of history → no-op.
+- Down past bottom → restores saved current input.
+- `saved_line` freed on all exit paths (Enter, Ctrl-C, Ctrl-D, EOF, realloc failure).
+
 ## Future work (later features in M6)
 
 - 6.2–6.4: Already partially implemented (basic char input, cursor, editing keys).
-- 6.5: History navigation (Up/Down arrows) — placeholders in escape sequence handler.
+- 6.6: History search (Ctrl-R) — reverse incremental search.
 - 6.7: Autosuggestions — will hook into `refresh_line()` to append greyed text.
 - 6.8: Syntax highlighting — will tokenize buffer and emit ANSI codes in `refresh_line()`.
 - 6.9–6.10: Tab completion — will intercept Tab key in the main read loop.
