@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "editor.h"
+#include "highlight.h"
 #include "history.h"
 
 #include <termios.h>
@@ -99,6 +100,50 @@ static const char *find_suggestion(const char *buf, size_t len) {
     return NULL;
 }
 
+// Map a HighlightType to an ANSI color escape sequence.
+static const char *hl_color(HighlightType type) {
+    switch (type) {
+    case HL_COMMAND:  return "\x1b[32m"; // green
+    case HL_ERROR:    return "\x1b[31m"; // red
+    case HL_STRING:   return "\x1b[33m"; // yellow
+    case HL_OPERATOR: return "\x1b[36m"; // cyan
+    case HL_VARIABLE: return "\x1b[35m"; // magenta
+    case HL_COMMENT:  return "\x1b[90m"; // grey
+    case HL_DEFAULT:  return "\x1b[0m";  // reset
+    }
+    return "\x1b[0m";
+}
+
+// Write the buffer with syntax highlighting colors.
+static void write_highlighted(const char *buf, size_t len,
+                              const HighlightType *colors) {
+    if (len == 0) {
+        return;
+    }
+
+    HighlightType cur = colors[0];
+    const char *seq = hl_color(cur);
+    term_write(seq, strlen(seq));
+
+    size_t span_start = 0;
+    for (size_t i = 1; i <= len; i++) {
+        HighlightType next = (i < len) ? colors[i] : HL_DEFAULT;
+        if (i == len || next != cur) {
+            // Flush the current span
+            term_write(buf + span_start, i - span_start);
+            if (i < len) {
+                cur = next;
+                seq = hl_color(cur);
+                term_write(seq, strlen(seq));
+            }
+            span_start = i;
+        }
+    }
+
+    // Reset
+    term_write("\x1b[0m", 4);
+}
+
 // Refresh the line display: rewrite prompt + buffer from column 0.
 // If suggestion is non-NULL, the suffix after buf is shown in grey.
 static void refresh_line(const char *prompt, const char *buf, size_t len,
@@ -112,8 +157,16 @@ static void refresh_line(const char *prompt, const char *buf, size_t len,
     // Write prompt
     term_write(prompt, strlen(prompt));
 
-    // Write buffer
-    term_write(buf, len);
+    // Write buffer with syntax highlighting
+    if (len > 0) {
+        HighlightType *colors = highlight_line(buf, len);
+        if (colors) {
+            write_highlighted(buf, len, colors);
+            free(colors);
+        } else {
+            term_write(buf, len);
+        }
+    }
 
     // Write suggestion suffix in dim grey
     if (suggestion) {
