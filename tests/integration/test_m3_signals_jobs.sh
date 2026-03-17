@@ -91,7 +91,7 @@ assert_file_contains "jobs shows command" "sleep 998" "$TMPDIR/jobs_out.txt"
 echo "--- Builtins: exit ---"
 
 actual=$(printf 'exit\n' | $SHELL_BIN 2>&1)
-assert_contains "exit prints goodbye" "Good bye" "$actual"
+assert_contains "exit prints goodbye" "Viszontlátásra" "$actual"
 
 # Builtins: cd
 echo "--- Builtins: cd ---"

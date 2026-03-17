@@ -15,7 +15,8 @@ static int builtin_exit(SimpleCommand *cmd) {
     if (cmd->argc > 1) {
         status = atoi(cmd->argv[1]);
     }
-    printf("Good bye!!\n");
+    printf("Viszontlátásra!!\n");
+    printf("Jó egészséget és sok szerencsét kívánok!\n");
     exit(status);
 }
 

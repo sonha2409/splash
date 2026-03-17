@@ -45,7 +45,8 @@ int main(void) {
 
         if (!fgets(line, sizeof(line), stdin)) {
             if (interactive) {
-                printf("\nGood bye!!\n");
+                printf("\nViszontlátásra!!\n");
+                printf("Jó egészséget és sok szerencsét kívánok!\n");
             }
             break;
         }
