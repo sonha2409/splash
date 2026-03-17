@@ -131,6 +131,155 @@ static char *readline_fgets(void) {
     return result;
 }
 
+// Search result from reverse-i-search.
+typedef enum {
+    SEARCH_ACCEPT,   // User pressed Enter — accept the matched line
+    SEARCH_CANCEL,   // User pressed Escape — return to normal editing
+    SEARCH_ABORT     // User pressed Ctrl-C — discard everything
+} SearchResult;
+
+// Display the search prompt: (reverse-i-search)'query': matched_line
+static void refresh_search(const char *query, size_t qlen,
+                           const char *match) {
+    term_write("\r", 1);
+    term_write("(reverse-i-search)'", 19);
+    term_write(query, qlen);
+    term_write("': ", 3);
+    if (match) {
+        term_write(match, strlen(match));
+    }
+    term_write("\x1b[0K", 4);
+}
+
+// Find the most recent history entry containing query, starting from search_idx
+// and going backwards. Returns the index, or -1 if not found.
+static int find_match(const char *query, size_t qlen, int start_idx) {
+    if (qlen == 0) {
+        // Empty query matches most recent entry
+        if (start_idx >= 0 && start_idx < history_count()) {
+            return start_idx;
+        }
+        return history_count() > 0 ? history_count() - 1 : -1;
+    }
+    // Need null-terminated query for strstr
+    char qbuf[512];
+    if (qlen >= sizeof(qbuf)) qlen = sizeof(qbuf) - 1;
+    memcpy(qbuf, query, qlen);
+    qbuf[qlen] = '\0';
+
+    for (int i = start_idx; i >= 0; i--) {
+        const char *entry = history_get(i);
+        if (entry && strstr(entry, qbuf)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Run the reverse-i-search interaction.
+// On SEARCH_ACCEPT: writes the matched line into *out_line (malloc'd, caller owns).
+// On SEARCH_CANCEL: *out_line is set to NULL (caller should keep current buffer).
+// On SEARCH_ABORT: *out_line is set to NULL.
+static SearchResult do_reverse_search(char **out_line) {
+    char query[512];
+    size_t qlen = 0;
+    int match_idx = history_count() - 1;
+    const char *match = NULL;
+
+    // Initial display
+    if (match_idx >= 0) {
+        match = history_get(match_idx);
+    }
+    refresh_search(query, qlen, match);
+
+    for (;;) {
+        char c;
+        ssize_t nread = read(STDIN_FILENO, &c, 1);
+        if (nread <= 0) {
+            *out_line = NULL;
+            return SEARCH_CANCEL;
+        }
+
+        switch (c) {
+        case '\r':
+        case '\n':
+            // Accept the current match
+            if (match) {
+                *out_line = strdup(match);
+            } else {
+                *out_line = NULL;
+            }
+            return SEARCH_ACCEPT;
+
+        case 27: {
+            // Escape — could be bare escape or escape sequence
+            // Try to read more to consume any escape sequence
+            struct termios tmp;
+            tcgetattr(STDIN_FILENO, &tmp);
+            struct termios nonblock = tmp;
+            nonblock.c_cc[VMIN] = 0;
+            nonblock.c_cc[VTIME] = 1;  // 100ms timeout
+            tcsetattr(STDIN_FILENO, TCSANOW, &nonblock);
+            char discard[8];
+            // Read and discard any escape sequence bytes
+            while (read(STDIN_FILENO, discard, 1) == 1) {
+                // consume
+            }
+            tcsetattr(STDIN_FILENO, TCSANOW, &tmp);
+            *out_line = NULL;
+            return SEARCH_CANCEL;
+        }
+
+        case 3:  // Ctrl-C
+            *out_line = NULL;
+            return SEARCH_ABORT;
+
+        case 18:  // Ctrl-R again — search older
+            if (match_idx > 0) {
+                int next = find_match(query, qlen, match_idx - 1);
+                if (next >= 0) {
+                    match_idx = next;
+                    match = history_get(match_idx);
+                    refresh_search(query, qlen, match);
+                }
+            }
+            break;
+
+        case 127:  // Backspace
+        case 8:    // Ctrl-H
+            if (qlen > 0) {
+                qlen--;
+                // Re-search from the end with shorter query
+                match_idx = history_count() - 1;
+                int idx = find_match(query, qlen, match_idx);
+                if (idx >= 0) {
+                    match_idx = idx;
+                    match = history_get(match_idx);
+                } else {
+                    match = NULL;
+                }
+                refresh_search(query, qlen, match);
+            }
+            break;
+
+        default:
+            if (c >= 32 && qlen < sizeof(query) - 1) {
+                query[qlen++] = c;
+                // Search with the new query from current position
+                int idx = find_match(query, qlen, match_idx);
+                if (idx >= 0) {
+                    match_idx = idx;
+                    match = history_get(match_idx);
+                } else {
+                    match = NULL;
+                }
+                refresh_search(query, qlen, match);
+            }
+            break;
+        }
+    }
+}
+
 char *editor_readline(const char *prompt) {
     if (!is_interactive) {
         return readline_fgets();
@@ -223,6 +372,44 @@ char *editor_readline(const char *prompt) {
             pos = 0;
             refresh_line(prompt, buf, len, pos);
             break;
+
+        case 18: {  // Ctrl-R: reverse history search
+            char *result = NULL;
+            SearchResult sr = do_reverse_search(&result);
+            if (sr == SEARCH_ACCEPT && result) {
+                // Replace buffer with the matched line and submit
+                leave_raw_mode();
+                // Show the accepted line on the normal prompt
+                term_write("\r", 1);
+                term_write(prompt, strlen(prompt));
+                term_write(result, strlen(result));
+                term_write("\x1b[0K\r\n", 6);
+                free(buf);
+                free(saved_line);
+                return result;
+            } else if (sr == SEARCH_ABORT) {
+                free(result);
+                // Redraw normal prompt, then discard (like Ctrl-C)
+                leave_raw_mode();
+                term_write("\r", 1);
+                term_write(prompt, strlen(prompt));
+                term_write("\x1b[0K", 4);
+                term_write("^C\r\n", 4);
+                free(buf);
+                free(saved_line);
+                buf = malloc(1);
+                if (!buf) {
+                    return NULL;
+                }
+                buf[0] = '\0';
+                return buf;
+            } else {
+                // SEARCH_CANCEL — restore normal editing
+                free(result);
+                refresh_line(prompt, buf, len, pos);
+            }
+            break;
+        }
 
         case 12:  // Ctrl-L: clear screen
             term_write("\x1b[H\x1b[2J", 7);

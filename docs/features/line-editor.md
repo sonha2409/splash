@@ -112,10 +112,35 @@ History is persisted to `~/.config/splash/history` (one command per line). The d
 - Down past bottom → restores saved current input.
 - `saved_line` freed on all exit paths (Enter, Ctrl-C, Ctrl-D, EOF, realloc failure).
 
+## Reverse Incremental Search (6.6)
+
+### Design
+
+Ctrl-R enters a separate input loop (`do_reverse_search()`) within `editor_readline()`. The search prompt displays `(reverse-i-search)'query': matched_line`, matching bash's format.
+
+### How it works
+
+- Each keystroke appends to the query and searches backwards through history via `strstr()` substring matching.
+- Ctrl-R again while in search mode jumps to the next older match.
+- Backspace shrinks the query and re-searches from the end.
+- Enter accepts the match — the matched line is shown on the normal prompt and immediately submitted.
+- Escape cancels — returns to normal editing with the buffer unchanged.
+- Ctrl-C aborts — discards the line entirely.
+
+### Key implementation details
+
+- `find_match(query, qlen, start_idx)`: Linear scan backwards from `start_idx`, returns first index where `strstr(entry, query)` succeeds.
+- Empty query matches the most recent history entry.
+- Escape handling: uses a short `VTIME` timeout (100ms) to distinguish bare Escape from escape sequences (arrow keys, etc.), consuming and discarding any trailing bytes.
+
+### Edge Cases
+
+- No matches for query → display stays on last match (or empty).
+- Ctrl-R at oldest match → no-op (doesn't wrap).
+- Empty history → search shows nothing, Enter returns NULL (no match to accept).
+
 ## Future work (later features in M6)
 
-- 6.2–6.4: Already partially implemented (basic char input, cursor, editing keys).
-- 6.6: History search (Ctrl-R) — reverse incremental search.
 - 6.7: Autosuggestions — will hook into `refresh_line()` to append greyed text.
 - 6.8: Syntax highlighting — will tokenize buffer and emit ANSI codes in `refresh_line()`.
 - 6.9–6.10: Tab completion — will intercept Tab key in the main read loop.

@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 6 — Line Editor (Fish-style)
-**Last completed feature**: 6.5 Command history
+**Last completed feature**: 6.6 History search (Ctrl-R)
 
 ---
 
@@ -203,7 +203,7 @@ splash/
 | 6.3 | Cursor movement | Left/Right arrows within line. Home (Ctrl-A) / End (Ctrl-E). | `DONE` | 2026-03-17 | Implemented with 6.1 |
 | 6.4 | Editing keys | Backspace, Delete (Ctrl-D), Ctrl-K (kill to end), Ctrl-U (kill to start), Ctrl-W (kill word back), Ctrl-Y (yank) | `DONE` | 2026-03-17 | Ctrl-W and Ctrl-Y deferred to later |
 | 6.5 | Command history | Up/Down arrows navigate. Persisted to `~/.config/splash/history`. | `DONE` | 2026-03-17 | Saves current input on browse, restores on return |
-| 6.6 | History search (Ctrl-R) | Reverse incremental search. Type to filter, Enter to accept, Ctrl-C to cancel. | `TODO` | | |
+| 6.6 | History search (Ctrl-R) | Reverse incremental search. Type to filter, Enter to accept, Ctrl-C to cancel. | `DONE` | 2026-03-17 | Substring match, Ctrl-R cycles older matches |
 | 6.7 | **Autosuggestions** | Show best matching history entry as greyed-out text. Right-arrow/End accepts. Must not block typing. | `TODO` | | |
 | 6.8 | **Syntax highlighting** | Tokenize on every keystroke. Valid cmd → green, invalid → red, strings → yellow, operators → cyan, vars → magenta, comments → grey. ANSI escape codes. | `TODO` | | |
 | 6.9 | Tab completion — paths | Complete current word as file/dir path. Ambiguous → common prefix. Double-Tab lists all. | `TODO` | | |
