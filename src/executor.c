@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "alias.h"
 #include "builtins.h"
 #include "command.h"
 #include "executor.h"
@@ -15,6 +16,8 @@
 #include "signals.h"
 #include "tokenizer.h"
 #include "util.h"
+
+#define ALIAS_MAX_EXPAND 16
 
 // Apply all redirections for a command. Called in child process before exec.
 // Returns 0 on success, -1 on failure (with error message printed).
@@ -284,18 +287,75 @@ int executor_execute(Pipeline *pl, const char *command_str) {
     return execute_pipeline_impl(pl, command_str);
 }
 
+// Expand aliases in the input line. Returns a newly allocated string if
+// expansion occurred, or NULL if no expansion was needed.
+// Caller must free the returned string.
+static char *expand_aliases(const char *line) {
+    // Find the first word (skip leading whitespace)
+    const char *start = line;
+    while (*start == ' ' || *start == '\t') {
+        start++;
+    }
+    if (*start == '\0') {
+        return NULL;
+    }
+
+    const char *end = start;
+    while (*end && *end != ' ' && *end != '\t' && *end != '\n') {
+        end++;
+    }
+
+    size_t word_len = (size_t)(end - start);
+    char word[256];
+    if (word_len >= sizeof(word)) {
+        return NULL;
+    }
+    memcpy(word, start, word_len);
+    word[word_len] = '\0';
+
+    const char *replacement = alias_get(word);
+    if (!replacement) {
+        return NULL;
+    }
+
+    // Build expanded line: leading whitespace + replacement + rest of line
+    size_t lead_len = (size_t)(start - line);
+    size_t repl_len = strlen(replacement);
+    size_t rest_len = strlen(end);
+    char *expanded = xmalloc(lead_len + repl_len + rest_len + 1);
+    memcpy(expanded, line, lead_len);
+    memcpy(expanded + lead_len, replacement, repl_len);
+    memcpy(expanded + lead_len + repl_len, end, rest_len);
+    expanded[lead_len + repl_len + rest_len] = '\0';
+    return expanded;
+}
+
 int executor_execute_line(const char *line) {
     if (!line || *line == '\0') {
         return 0;
     }
 
-    TokenList *tokens = tokenizer_tokenize(line);
+    // Expand aliases (with depth limit to prevent infinite loops)
+    const char *effective = line;
+    char *expanded = NULL;
+    for (int depth = 0; depth < ALIAS_MAX_EXPAND; depth++) {
+        char *next = expand_aliases(effective);
+        if (!next) {
+            break;
+        }
+        free(expanded);
+        expanded = next;
+        effective = expanded;
+    }
+
+    TokenList *tokens = tokenizer_tokenize(effective);
     Pipeline *pl = parser_parse(tokens);
     int status = 0;
     if (pl) {
-        status = executor_execute(pl, line);
+        status = executor_execute(pl, effective);
         pipeline_free(pl);
     }
     token_list_free(tokens);
+    free(expanded);
     return status;
 }

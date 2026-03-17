@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "alias.h"
 #include "builtins.h"
 #include "executor.h"
 #include "jobs.h"
@@ -328,6 +329,65 @@ static int builtin_source(SimpleCommand *cmd) {
     return last_status;
 }
 
+// alias [name[='value']]
+static int builtin_alias(SimpleCommand *cmd) {
+    if (cmd->argc < 2) {
+        alias_print_all();
+        return 0;
+    }
+    for (int i = 1; i < cmd->argc; i++) {
+        char *eq = strchr(cmd->argv[i], '=');
+        if (eq) {
+            size_t name_len = (size_t)(eq - cmd->argv[i]);
+            char *name = xmalloc(name_len + 1);
+            memcpy(name, cmd->argv[i], name_len);
+            name[name_len] = '\0';
+            const char *value = eq + 1;
+            // Strip surrounding quotes if present
+            size_t vlen = strlen(value);
+            if (vlen >= 2 &&
+                ((value[0] == '\'' && value[vlen - 1] == '\'') ||
+                 (value[0] == '"' && value[vlen - 1] == '"'))) {
+                char *stripped = xmalloc(vlen - 1);
+                memcpy(stripped, value + 1, vlen - 2);
+                stripped[vlen - 2] = '\0';
+                alias_set(name, stripped);
+                free(stripped);
+            } else {
+                alias_set(name, value);
+            }
+            free(name);
+        } else {
+            // Print specific alias
+            const char *val = alias_get(cmd->argv[i]);
+            if (val) {
+                printf("alias %s='%s'\n", cmd->argv[i], val);
+            } else {
+                fprintf(stderr, "splash: alias: %s: not found\n",
+                        cmd->argv[i]);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// unalias name
+static int builtin_unalias(SimpleCommand *cmd) {
+    if (cmd->argc < 2) {
+        fprintf(stderr, "splash: unalias: usage: unalias name\n");
+        return 1;
+    }
+    for (int i = 1; i < cmd->argc; i++) {
+        if (alias_remove(cmd->argv[i]) == -1) {
+            fprintf(stderr, "splash: unalias: %s: not found\n",
+                    cmd->argv[i]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int builtin_is_builtin(const char *name) {
     return strcmp(name, "exit") == 0 ||
            strcmp(name, "cd") == 0 ||
@@ -338,7 +398,9 @@ int builtin_is_builtin(const char *name) {
            strcmp(name, "setenv") == 0 ||
            strcmp(name, "unsetenv") == 0 ||
            strcmp(name, "export") == 0 ||
-           strcmp(name, "source") == 0;
+           strcmp(name, "source") == 0 ||
+           strcmp(name, "alias") == 0 ||
+           strcmp(name, "unalias") == 0;
 }
 
 int builtin_execute(SimpleCommand *cmd) {
@@ -354,6 +416,8 @@ int builtin_execute(SimpleCommand *cmd) {
     if (strcmp(name, "unsetenv") == 0) return builtin_unsetenv(cmd);
     if (strcmp(name, "export") == 0)   return builtin_export(cmd);
     if (strcmp(name, "source") == 0)   return builtin_source(cmd);
+    if (strcmp(name, "alias") == 0)    return builtin_alias(cmd);
+    if (strcmp(name, "unalias") == 0)  return builtin_unalias(cmd);
 
     fprintf(stderr, "splash: %s: unknown builtin\n", name);
     return 1;

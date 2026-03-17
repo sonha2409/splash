@@ -172,6 +172,39 @@ OUT=$(echo "source $TMPDIR/outer.sh" | $SHELL_BIN 2>&1)
 assert_contains "nested source inner" "from inner" "$OUT"
 assert_contains "nested source outer" "from outer" "$OUT"
 
+# --- 4.8 alias / unalias ---
+echo "--- 4.8 alias / unalias ---"
+
+# Basic alias
+OUT=$(printf "alias greet='/bin/echo hello'\ngreet\n" | $SHELL_BIN 2>&1)
+assert_contains "alias basic expansion" "hello" "$OUT"
+
+# Alias with arguments
+OUT=$(printf "alias greet='/bin/echo hi'\ngreet world\n" | $SHELL_BIN 2>&1)
+assert_contains "alias with trailing args" "hi world" "$OUT"
+
+# Alias list
+OUT=$(printf "alias foo='bar'\nalias baz='qux'\nalias\n" | $SHELL_BIN 2>&1)
+assert_contains "alias list shows foo" "alias foo='bar'" "$OUT"
+assert_contains "alias list shows baz" "alias baz='qux'" "$OUT"
+
+# Alias print specific
+OUT=$(printf "alias myalias='myval'\nalias myalias\n" | $SHELL_BIN 2>&1)
+assert_contains "alias print specific" "alias myalias='myval'" "$OUT"
+
+# Unalias
+OUT=$(printf "alias rmme='/bin/echo removed'\nunalias rmme\nrmme\n" | $SHELL_BIN 2>&1)
+# After unalias, rmme should not be found (not an alias, not a command)
+assert_not_contains "unalias removes alias" "removed" "$OUT"
+
+# Unalias not found
+OUT=$(echo "unalias nonexistent" | $SHELL_BIN 2>&1)
+assert_contains "unalias not found error" "not found" "$OUT"
+
+# Alias shadows builtin
+OUT=$(printf "alias printenv='/bin/echo shadowed'\nprintenv\n" | $SHELL_BIN 2>&1)
+assert_contains "alias shadows builtin" "shadowed" "$OUT"
+
 # --- Summary ---
 echo ""
 echo "test_m4_builtins"
