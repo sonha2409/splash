@@ -525,3 +525,17 @@ int builtin_execute(SimpleCommand *cmd) {
     fprintf(stderr, "splash: %s: unknown builtin\n", name);
     return 1;
 }
+
+int builtin_is_structured(const char *name) {
+    // Structured builtins will be added in 7.6+
+    (void)name;
+    return 0;
+}
+
+PipelineStage *builtin_create_stage(SimpleCommand *cmd,
+                                    PipelineStage *upstream) {
+    // Structured builtins will be added in 7.6+
+    (void)cmd;
+    pipeline_stage_free(upstream);
+    return NULL;
+}

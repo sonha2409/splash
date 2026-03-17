@@ -241,9 +241,13 @@ downstream.next()
 - `pipeline_stage_drain()` consumes the stage — calls `pipeline_stage_free()` when done.
 - Each `Value*` returned by `next()` is owned by the caller.
 
+### `pipeline_stage_drain_to_fd()` (added in 7.5)
+
+Variant of `pipeline_stage_drain()` that writes to a raw file descriptor instead of a `FILE *`. Used by the executor's auto-serialize bridge to pipe structured data into external commands. Opens the fd as a `FILE *` via `fdopen()`, drains, then `fclose()` (which also closes the underlying fd).
+
 ### Testing
 
-57 assertions using mock stages:
+57 assertions using mock stages (+ 17 from 7.5):
 - Int source: yields 0..N-1, then NULL; verified sequential and lazy pull
 - Double filter: transforms each upstream value (x*2)
 - Even filter: skips odd values, demonstrating conditional pull
@@ -251,3 +255,64 @@ downstream.next()
 - Lazy evaluation: confirmed source only advances when pulled (100-item source, only 2 pulled)
 - Drain: verified output for ints (line-per-value), tables (pretty-printed), empty, and NULL
 - Free: NULL safety for both free and drain
+- Drain-to-fd: ints via pipe, table via pipe, empty source, NULL stage, bad fd
+
+---
+
+## Auto-serialize (7.5)
+
+### Design
+
+When a structured pipeline segment (connected by `|>`) ends and the next command is an external process (connected by `|` or at the end of the pipeline), structured data must be serialized to text. This is the **auto-serialize bridge**.
+
+### How it works
+
+The executor detects `|>` in the pipeline's `pipe_types[]` array:
+
+1. **Detection**: `pipeline_has_structured()` scans for any `PIPE_STRUCTURED` entries.
+2. **Segment identification**: Starting from the first `|>`, find the contiguous run of structured builtins/filters.
+3. **Serialization bridge**: If the structured segment feeds into an external command:
+   - Create a `pipe()`
+   - Fork a serializer child that calls `pipeline_stage_drain_to_fd()` on the write end
+   - The external command reads from the read end as normal text stdin
+4. **Fallback**: If the first command in a `|>` chain is NOT a structured builtin, all `|>` are treated as plain text pipes. This provides graceful degradation.
+
+### Integration points
+
+- **`builtins.h`**: Added `builtin_is_structured()` and `builtin_create_stage()` — stubs returning 0/NULL until structured builtins are added in 7.6+.
+- **`pipeline.h`**: Added `pipeline_stage_drain_to_fd(int fd)` for writing structured output to a pipe fd.
+- **`executor.c`**: Added `execute_structured_pipeline()` with the full serialization bridge logic.
+
+### Executor flow for `ls |> where size > 1000 | grep foo`
+
+```
+executor_execute()
+  → pipeline_has_structured() → true
+  → execute_structured_pipeline()
+    → builtin_is_structured("ls") → true (after 7.6)
+    → builtin_create_stage("ls") → PipelineStage* (source)
+    → builtin_create_stage("where", stage) → PipelineStage* (filter)
+    → pipe() → [read_fd, write_fd]
+    → fork() serializer child:
+        pipeline_stage_drain_to_fd(stage, write_fd)
+        _exit(0)
+    → parent: dup2(read_fd, STDIN_FILENO)
+    → execute_pipeline_impl(sub_pipeline with "grep foo")
+    → restore STDIN, waitpid serializer
+```
+
+### Edge cases
+
+- `|>` between two external commands: falls back to text pipe (no structured source)
+- Single structured builtin with no pipe: drains directly to stdout
+- Empty structured output: serializer writes nothing, downstream gets EOF
+- Serializer child handles SIGPIPE if downstream closes early (default signal behavior after `signals_default()`)
+
+### Testing
+
+5 new `drain_to_fd` tests (17 assertions):
+- Integers written to pipe fd, read back and verified
+- Table written to pipe fd, headers and data verified
+- Empty source produces no output
+- NULL stage with valid fd: fd gets closed, no crash
+- Bad fd (-1): stage gets freed, no crash

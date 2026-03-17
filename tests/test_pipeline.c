@@ -1,6 +1,8 @@
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "pipeline.h"
 #include "table.h"
@@ -297,6 +299,92 @@ static void test_pipeline_filter_on_empty(void) {
 }
 
 
+// --- drain_to_fd tests ---
+
+static void test_pipeline_drain_to_fd_ints(void) {
+    PipelineStage *src = make_int_source(3);
+
+    int pfd[2];
+    ASSERT(pipe(pfd) == 0);
+
+    // drain_to_fd consumes stage and closes write end
+    pipeline_stage_drain_to_fd(src, pfd[1]);
+
+    // Read from pipe
+    char buf[256];
+    ssize_t n = read(pfd[0], buf, sizeof(buf) - 1);
+    ASSERT(n > 0);
+    buf[n] = '\0';
+    close(pfd[0]);
+
+    ASSERT(strstr(buf, "0\n") != NULL);
+    ASSERT(strstr(buf, "1\n") != NULL);
+    ASSERT(strstr(buf, "2\n") != NULL);
+}
+
+static void test_pipeline_drain_to_fd_table(void) {
+    PipelineStage *src = make_table_source();
+
+    int pfd[2];
+    ASSERT(pipe(pfd) == 0);
+
+    pipeline_stage_drain_to_fd(src, pfd[1]);
+
+    char buf[1024];
+    ssize_t n = read(pfd[0], buf, sizeof(buf) - 1);
+    ASSERT(n > 0);
+    buf[n] = '\0';
+    close(pfd[0]);
+
+    // Should contain pretty-printed table
+    ASSERT(strstr(buf, "name") != NULL);
+    ASSERT(strstr(buf, "val") != NULL);
+    ASSERT(strstr(buf, "alpha") != NULL);
+    ASSERT(strstr(buf, "beta") != NULL);
+    ASSERT(strstr(buf, "10") != NULL);
+    ASSERT(strstr(buf, "20") != NULL);
+}
+
+static void test_pipeline_drain_to_fd_empty(void) {
+    PipelineStage *src = make_int_source(0);
+
+    int pfd[2];
+    ASSERT(pipe(pfd) == 0);
+
+    pipeline_stage_drain_to_fd(src, pfd[1]);
+
+    // Nothing should have been written
+    char buf[64];
+    // Set non-blocking to avoid hanging on empty pipe
+    int flags = fcntl(pfd[0], F_GETFL);
+    fcntl(pfd[0], F_SETFL, flags | O_NONBLOCK);
+    ssize_t n = read(pfd[0], buf, sizeof(buf));
+    ASSERT(n <= 0); // 0 (EOF) or -1 (EAGAIN)
+    close(pfd[0]);
+}
+
+static void test_pipeline_drain_to_fd_null(void) {
+    // Should not crash; fd should be closed
+    int pfd[2];
+    ASSERT(pipe(pfd) == 0);
+
+    pipeline_stage_drain_to_fd(NULL, pfd[1]); // closes pfd[1]
+
+    // Verify pfd[1] was closed by checking write fails
+    char c = 'x';
+    ssize_t w = write(pfd[1], &c, 1);
+    ASSERT(w == -1); // EBADF since fd was closed
+
+    close(pfd[0]);
+}
+
+static void test_pipeline_drain_to_fd_bad_fd(void) {
+    PipelineStage *src = make_int_source(3);
+    // Should not crash — stage gets freed, fd -1 is handled
+    pipeline_stage_drain_to_fd(src, -1);
+}
+
+
 int main(void) {
     printf("test_pipeline:\n");
 
@@ -312,6 +400,11 @@ int main(void) {
     test_pipeline_drain_null();
     test_pipeline_free_null();
     test_pipeline_filter_on_empty();
+    test_pipeline_drain_to_fd_ints();
+    test_pipeline_drain_to_fd_table();
+    test_pipeline_drain_to_fd_empty();
+    test_pipeline_drain_to_fd_null();
+    test_pipeline_drain_to_fd_bad_fd();
 
     TEST_REPORT();
 }

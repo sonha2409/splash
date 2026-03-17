@@ -31,6 +31,12 @@ PipelineStage *pipeline_stage_new(
 // Consumes the stage (calls pipeline_stage_free when done).
 void pipeline_stage_drain(PipelineStage *stage, FILE *out);
 
+// Pull all values from the stage and write them to a raw file descriptor.
+// Tables are pretty-printed; other values use value_to_string() + newline.
+// Consumes the stage (calls pipeline_stage_free when done).
+// Closes fd when done writing.
+void pipeline_stage_drain_to_fd(PipelineStage *stage, int fd);
+
 // Free a stage and its entire upstream chain recursively.
 void pipeline_stage_free(PipelineStage *stage);
 

@@ -14,11 +14,15 @@
 #include "expand.h"
 #include "jobs.h"
 #include "parser.h"
+#include "pipeline.h"
 #include "signals.h"
 #include "tokenizer.h"
 #include "util.h"
 
 #define ALIAS_MAX_EXPAND 16
+
+// Forward declaration — defined below execute_structured_pipeline().
+static int execute_pipeline_impl(Pipeline *pl, const char *command_str);
 
 // Apply all redirections for a command. Called in child process before exec.
 // Returns 0 on success, -1 on failure (with error message printed).
@@ -101,6 +105,199 @@ static int apply_redirections(SimpleCommand *cmd) {
         close(fd);
     }
     return 0;
+}
+
+// Check if a pipeline contains any structured pipes (|>).
+static int pipeline_has_structured(Pipeline *pl) {
+    for (int i = 0; i < pl->num_commands - 1; i++) {
+        if (pl->pipe_types[i] == PIPE_STRUCTURED) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Check if a command name is a structured filter (builtin that operates on |> data).
+// Structured filters transform pipeline stages rather than producing text output.
+static int is_structured_filter(const char *name) {
+    // Filters will be added in 7.10+
+    (void)name;
+    return 0;
+}
+
+// Execute a pipeline that contains |> structured pipe segments.
+// Structured builtins produce PipelineStage values; when a structured segment
+// ends before an external command, we serialize via pipeline_stage_drain_to_fd().
+//
+// A structured segment is a contiguous run of commands connected by |> where
+// the first is a structured builtin/filter source and the rest are structured
+// filters. When the segment ends (next pipe is | or end of pipeline), we either
+// drain to stdout or serialize into a text pipe feeding the next external command.
+static int execute_structured_pipeline(Pipeline *pl, const char *command_str) {
+    // Walk the pipeline to find structured segments.
+    // A structured segment starts at a command that is a structured builtin,
+    // and continues through |> connections to structured filters.
+    //
+    // For now, if the first command in a |> chain is NOT a structured builtin,
+    // we treat the |> as a plain text pipe (fallback). This allows graceful
+    // degradation until structured builtins are added in 7.6+.
+
+    // Find the first |> and check if its source is a structured builtin
+    int struct_start = -1;
+    for (int i = 0; i < pl->num_commands - 1; i++) {
+        if (pl->pipe_types[i] == PIPE_STRUCTURED) {
+            if (builtin_is_structured(pl->commands[i]->argv[0])) {
+                struct_start = i;
+            }
+            break;
+        }
+    }
+
+    // No structured source found — fall back to text pipeline.
+    // Treat all |> as regular | pipes.
+    if (struct_start < 0) {
+        return execute_pipeline_impl(pl, command_str);
+    }
+
+    // Build the structured pipeline stage chain starting from struct_start.
+    PipelineStage *stage = builtin_create_stage(
+        pl->commands[struct_start], NULL);
+    if (!stage) {
+        // Structured builtin failed to create stage — fall back
+        return execute_pipeline_impl(pl, command_str);
+    }
+
+    // Chain structured filters connected by |>
+    int struct_end = struct_start; // inclusive end of structured segment
+    for (int i = struct_start; i < pl->num_commands - 1; i++) {
+        if (pl->pipe_types[i] != PIPE_STRUCTURED) {
+            break;
+        }
+        int next = i + 1;
+        SimpleCommand *next_cmd = pl->commands[next];
+        if (builtin_is_structured(next_cmd->argv[0]) ||
+            is_structured_filter(next_cmd->argv[0])) {
+            stage = builtin_create_stage(next_cmd, stage);
+            if (!stage) {
+                return -1;
+            }
+            struct_end = next;
+        } else {
+            // Next command is external — structured segment ends here
+            break;
+        }
+    }
+
+    // Now we have a structured segment [struct_start..struct_end].
+    // Determine what comes after:
+    //   - Nothing (struct_end is the last command): drain to stdout
+    //   - A text pipe into more commands: serialize into pipe, then run
+    //     the remaining commands as a sub-pipeline
+
+    if (struct_end == pl->num_commands - 1) {
+        // Structured segment is the entire rest of the pipeline — drain to stdout
+        pipeline_stage_drain(stage, stdout);
+        return 0;
+    }
+
+    // Structured segment feeds into an external command.
+    // Create a pipe, fork a child to serialize, and set up the remaining
+    // commands with stdin reading from the pipe.
+    int ser_pipe[2];
+    if (pipe(ser_pipe) == -1) {
+        fprintf(stderr, "splash: pipe: %s\n", strerror(errno));
+        pipeline_stage_free(stage);
+        return -1;
+    }
+
+    pid_t ser_pid = fork();
+    if (ser_pid < 0) {
+        fprintf(stderr, "splash: fork: %s\n", strerror(errno));
+        close(ser_pipe[0]);
+        close(ser_pipe[1]);
+        pipeline_stage_free(stage);
+        return -1;
+    }
+
+    if (ser_pid == 0) {
+        // Serializer child: write structured data to pipe, then exit
+        close(ser_pipe[0]);
+        signals_default();
+        pipeline_stage_drain_to_fd(stage, ser_pipe[1]); // closes ser_pipe[1]
+        _exit(0);
+    }
+
+    // Parent: close write end, redirect read end as stdin for remaining pipeline
+    close(ser_pipe[1]);
+    pipeline_stage_free(stage);
+
+    // Build a sub-pipeline from the remaining commands (struct_end+1 onward)
+    int remaining = pl->num_commands - (struct_end + 1);
+    Pipeline *sub = pipeline_new();
+    for (int i = struct_end + 1; i < pl->num_commands; i++) {
+        // Temporarily move commands — we'll put them back after execution
+        pipeline_add_command(sub, pl->commands[i]);
+        if (i < pl->num_commands - 1 && i > struct_end + 1) {
+            pipeline_add_pipe_type(sub, pl->pipe_types[i]);
+        }
+    }
+    // Add pipe types for the sub-pipeline
+    if (remaining > 1) {
+        // We already added the commands; now fix up pipe_types
+        // The pipe types between sub-pipeline commands start at index struct_end+1
+        for (int i = 0; i < remaining - 1; i++) {
+            sub->pipe_types[i] = pl->pipe_types[struct_end + 1 + i];
+        }
+    }
+    sub->background = pl->background;
+
+    // We need stdin of the first sub-command to read from ser_pipe[0].
+    // Save original stdin and redirect.
+    int saved_stdin = dup(STDIN_FILENO);
+    if (saved_stdin == -1) {
+        fprintf(stderr, "splash: dup stdin: %s\n", strerror(errno));
+        close(ser_pipe[0]);
+        // Null out moved commands to prevent double-free
+        for (int i = 0; i < remaining; i++) {
+            sub->commands[i] = NULL;
+        }
+        sub->num_commands = 0;
+        pipeline_free(sub);
+        waitpid(ser_pid, NULL, 0);
+        return -1;
+    }
+
+    if (dup2(ser_pipe[0], STDIN_FILENO) == -1) {
+        fprintf(stderr, "splash: dup2 stdin: %s\n", strerror(errno));
+        close(ser_pipe[0]);
+        close(saved_stdin);
+        for (int i = 0; i < remaining; i++) {
+            sub->commands[i] = NULL;
+        }
+        sub->num_commands = 0;
+        pipeline_free(sub);
+        waitpid(ser_pid, NULL, 0);
+        return -1;
+    }
+    close(ser_pipe[0]);
+
+    int status = execute_pipeline_impl(sub, command_str);
+
+    // Restore stdin
+    dup2(saved_stdin, STDIN_FILENO);
+    close(saved_stdin);
+
+    // Null out the borrowed commands so sub pipeline doesn't free them
+    for (int i = 0; i < remaining; i++) {
+        sub->commands[i] = NULL;
+    }
+    sub->num_commands = 0;
+    pipeline_free(sub);
+
+    // Wait for serializer child
+    waitpid(ser_pid, NULL, 0);
+
+    return status;
 }
 
 // Execute a pipeline (single or multi-stage).
@@ -278,12 +475,28 @@ int executor_execute(Pipeline *pl, const char *command_str) {
         return 0;
     }
 
+    // Single structured builtin: build stage and drain to stdout
+    if (pl->num_commands == 1 && !pl->background &&
+        builtin_is_structured(pl->commands[0]->argv[0])) {
+        PipelineStage *stage = builtin_create_stage(pl->commands[0], NULL);
+        if (stage) {
+            pipeline_stage_drain(stage, stdout);
+            return 0;
+        }
+        // Fall through to normal execution on failure
+    }
+
     // Check for builtins (single command, non-pipeline only)
     if (pl->num_commands == 1 && !pl->background) {
         SimpleCommand *cmd = pl->commands[0];
         if (builtin_is_builtin(cmd->argv[0])) {
             return builtin_execute(cmd);
         }
+    }
+
+    // Check for structured pipes — route through structured executor
+    if (pl->num_commands > 1 && pipeline_has_structured(pl)) {
+        return execute_structured_pipeline(pl, command_str);
     }
 
     return execute_pipeline_impl(pl, command_str);
