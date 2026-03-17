@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 6 — Line Editor (Fish-style)
-**Last completed feature**: 6.8 Syntax highlighting
+**Last completed feature**: 6.9 Tab completion — paths
 
 ---
 
@@ -206,7 +206,7 @@ splash/
 | 6.6 | History search (Ctrl-R) | Reverse incremental search. Type to filter, Enter to accept, Ctrl-C to cancel. | `DONE` | 2026-03-17 | Substring match, Ctrl-R cycles older matches |
 | 6.7 | **Autosuggestions** | Show best matching history entry as greyed-out text. Right-arrow/End accepts. Must not block typing. | `DONE` | 2026-03-17 | Prefix match, dim grey rendering, Right/End/Ctrl-E accepts |
 | 6.8 | **Syntax highlighting** | Tokenize on every keystroke. Valid cmd → green, invalid → red, strings → yellow, operators → cyan, vars → magenta, comments → grey. ANSI escape codes. | `DONE` | 2026-03-17 | Lightweight scanner separate from tokenizer; $VAR highlighted inside double quotes |
-| 6.9 | Tab completion — paths | Complete current word as file/dir path. Ambiguous → common prefix. Double-Tab lists all. | `TODO` | | |
+| 6.9 | Tab completion — paths | Complete current word as file/dir path. Ambiguous → common prefix. Double-Tab lists all. | `DONE` | 2026-03-17 | Dirs get trailing /, files get trailing space; double-tab lists in columns |
 | 6.10 | Tab completion — commands | First word → complete from PATH + builtins + aliases. | `TODO` | | |
 | 6.11 | Vi/Emacs mode switching | Toggle via config option or runtime command. | `STRETCH` | | |
 | 6.12 | Ctrl-? help display | Show available keybindings. | `TODO` | | |

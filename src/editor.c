@@ -4,9 +4,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "complete.h"
 #include "editor.h"
 #include "highlight.h"
 #include "history.h"
+#include "util.h"
 
 #include <termios.h>
 
@@ -383,6 +385,9 @@ char *editor_readline(const char *prompt) {
     int hist_index = history_count();  // One past end = "current line"
     char *saved_line = NULL;           // Saved current input when browsing history
 
+    // Tab completion state
+    int last_was_tab = 0;
+
     for (;;) {
         char c;
         ssize_t nread = read(STDIN_FILENO, &c, 1);
@@ -392,6 +397,11 @@ char *editor_readline(const char *prompt) {
             free(saved_line);
             leave_raw_mode();
             return NULL;
+        }
+
+        // Track consecutive Tab presses for double-tab listing
+        if (c != 9) {
+            last_was_tab = 0;
         }
 
         switch (c) {
@@ -509,6 +519,127 @@ char *editor_readline(const char *prompt) {
             term_write("\x1b[H\x1b[2J", 7);
             refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             break;
+
+        case 9: {  // Tab: path completion
+            // Find the start of the current word (scan back from cursor)
+            buf[len] = '\0';
+            size_t word_start = pos;
+            while (word_start > 0 && buf[word_start - 1] != ' ' &&
+                   buf[word_start - 1] != '\t' &&
+                   buf[word_start - 1] != '|' &&
+                   buf[word_start - 1] != ';' &&
+                   buf[word_start - 1] != '&' &&
+                   buf[word_start - 1] != '>' &&
+                   buf[word_start - 1] != '<' &&
+                   buf[word_start - 1] != '(' &&
+                   buf[word_start - 1] != ')') {
+                word_start--;
+            }
+
+            // Extract the word prefix
+            size_t word_len = pos - word_start;
+            char *word = xmalloc(word_len + 1);
+            memcpy(word, buf + word_start, word_len);
+            word[word_len] = '\0';
+
+            CompletionResult *cr = complete_path(word);
+            free(word);
+
+            if (cr->count == 0) {
+                // No matches — do nothing
+                completion_result_free(cr);
+                last_was_tab = 1;
+                break;
+            }
+
+            if (cr->count == 1) {
+                // Single match — replace word and add space if not dir
+                const char *match = cr->matches[0];
+                size_t mlen = strlen(match);
+                int is_dir = (mlen > 0 && match[mlen - 1] == '/');
+
+                // Calculate new buffer size: before_word + match + suffix_char + after_cursor
+                size_t after_len = len - pos;
+                size_t new_len = word_start + mlen + (is_dir ? 0 : 1) + after_len;
+                while (new_len + 1 > cap) {
+                    cap *= 2;
+                    char *nb = realloc(buf, cap);
+                    if (nb) buf = nb;
+                }
+
+                // Shift the text after cursor
+                memmove(buf + word_start + mlen + (is_dir ? 0 : 1),
+                        buf + pos, after_len);
+                // Copy in the match
+                memcpy(buf + word_start, match, mlen);
+                if (!is_dir) {
+                    buf[word_start + mlen] = ' ';
+                }
+                len = new_len;
+                pos = word_start + mlen + (is_dir ? 0 : 1);
+                refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
+                completion_result_free(cr);
+                last_was_tab = 1;
+                break;
+            }
+
+            // Multiple matches — complete to common prefix
+            char *common = completion_common_prefix(cr);
+            size_t clen = common ? strlen(common) : 0;
+
+            if (common && clen > word_len) {
+                // Replace word with common prefix
+                size_t after_len = len - pos;
+                size_t new_len = word_start + clen + after_len;
+                while (new_len + 1 > cap) {
+                    cap *= 2;
+                    char *nb = realloc(buf, cap);
+                    if (nb) buf = nb;
+                }
+                memmove(buf + word_start + clen, buf + pos, after_len);
+                memcpy(buf + word_start, common, clen);
+                len = new_len;
+                pos = word_start + clen;
+                refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
+            } else if (last_was_tab) {
+                // Double-tab: list all matches
+                term_write("\r\n", 2);
+
+                // Find the longest match for column formatting
+                size_t max_len = 0;
+                for (int i = 0; i < cr->count; i++) {
+                    size_t ml = strlen(cr->matches[i]);
+                    if (ml > max_len) max_len = ml;
+                }
+
+                // Print in columns (assume ~80 char terminal width)
+                size_t col_width = max_len + 2;
+                int cols = 80 / (int)col_width;
+                if (cols < 1) cols = 1;
+
+                for (int i = 0; i < cr->count; i++) {
+                    if (i > 0 && i % cols == 0) {
+                        term_write("\r\n", 2);
+                    }
+                    term_write(cr->matches[i], strlen(cr->matches[i]));
+                    // Pad with spaces
+                    size_t ml = strlen(cr->matches[i]);
+                    size_t pad = col_width - ml;
+                    for (size_t p = 0; p < pad; p++) {
+                        term_write(" ", 1);
+                    }
+                }
+                term_write("\r\n", 2);
+
+                // Redraw prompt and buffer
+                refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
+            }
+
+            free(common);
+            completion_result_free(cr);
+            last_was_tab = 1;
+            break;
+        }
 
         case 3:  // Ctrl-C: discard line
             leave_raw_mode();
