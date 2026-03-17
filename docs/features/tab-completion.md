@@ -1,4 +1,4 @@
-# Tab Completion — Paths (Feature 6.9)
+# Tab Completion — Paths & Commands (Features 6.9, 6.10)
 
 ## Design
 
@@ -61,10 +61,27 @@ When replacing a word with a completion:
 - **Directory completion** — trailing `/` appended, no trailing space (allows continuing to type)
 - **Tilde paths** — `~/Do` expands `~` for lookup but preserves `~/` in the result
 
+## Command Completion (Feature 6.10)
+
+When the word being completed is in command position (first word on the line, or first word after `|`, `||`, `&&`, `;`, `&`, `(`), Tab completes from:
+
+1. **Shell builtins** — `cd`, `exit`, `export`, `fg`, `bg`, `jobs`, `alias`, etc.
+2. **User-defined aliases** — iterated via `alias_count()` / `alias_get_name()`
+3. **$PATH executables** — each directory in `$PATH` is scanned with `opendir()`/`readdir()`, entries checked with `access(X_OK)`
+
+Deduplication ensures a name appearing in multiple sources (e.g., `echo` as both a PATH executable and potential alias) only appears once.
+
+If the prefix contains a `/`, it's treated as a path and delegated to `complete_path()` instead.
+
+### Command position detection
+
+In `editor.c`, the Tab handler determines command position by scanning backwards from the word start, skipping whitespace, and checking if the previous non-whitespace character is an operator (`|`, `;`, `&`, `(`) or if we're at the beginning of the line.
+
 ## Testing
 
-`tests/test_complete.c` — 78 assertions covering:
+`tests/test_complete.c` — 153 assertions covering:
 
+**Path completion:**
 - Empty prefix returns results
 - Nonexistent directory returns empty
 - No-match prefix returns empty
@@ -76,3 +93,11 @@ When replacing a word with a completion:
 - Alphabetical sort order
 - Single match common prefix
 - No-match common prefix returns NULL
+
+**Command completion:**
+- Builtin matching (exact and partial)
+- PATH executable matching
+- No-match returns empty
+- Results sorted alphabetically
+- No duplicate entries
+- Prefix with `/` delegates to path completion

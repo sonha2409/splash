@@ -5,6 +5,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "alias.h"
+#include "builtins.h"
 #include "complete.h"
 #include "util.h"
 
@@ -188,5 +190,97 @@ CompletionResult *complete_path(const char *prefix) {
 
     free(dir_path);
     free(open_path);
+    return result;
+}
+
+// Check if the result already contains this match (avoid duplicates).
+static int result_has(const CompletionResult *r, const char *name) {
+    for (int i = 0; i < r->count; i++) {
+        if (strcmp(r->matches[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// List of builtin command names (must match builtins.c).
+static const char *builtin_names[] = {
+    "alias", "bg", "cd", "exit", "export", "fg", "history",
+    "jobs", "printenv", "setenv", "source", "type", "unalias",
+    "unsetenv", "which",
+    NULL
+};
+
+CompletionResult *complete_command(const char *prefix) {
+    CompletionResult *result = result_new();
+    size_t prefix_len = strlen(prefix);
+
+    // If the prefix contains a slash, it's a path — delegate to complete_path
+    if (strchr(prefix, '/')) {
+        completion_result_free(result);
+        return complete_path(prefix);
+    }
+
+    // 1. Match builtins
+    for (int i = 0; builtin_names[i]; i++) {
+        if (strncmp(builtin_names[i], prefix, prefix_len) == 0) {
+            result_add(result, builtin_names[i]);
+        }
+    }
+
+    // 2. Match aliases
+    int nalias = alias_count();
+    for (int i = 0; i < nalias; i++) {
+        const char *name = alias_get_name(i);
+        if (name && strncmp(name, prefix, prefix_len) == 0 &&
+            !result_has(result, name)) {
+            result_add(result, name);
+        }
+    }
+
+    // 3. Match executables in $PATH
+    const char *path_env = getenv("PATH");
+    if (path_env) {
+        char *path_copy = xstrdup(path_env);
+        char *saveptr = NULL;
+        char *dir = strtok_r(path_copy, ":", &saveptr);
+
+        while (dir) {
+            DIR *d = opendir(dir);
+            if (d) {
+                struct dirent *entry;
+                while ((entry = readdir(d)) != NULL) {
+                    const char *name = entry->d_name;
+                    if (name[0] == '.') {
+                        continue;
+                    }
+                    if (strncmp(name, prefix, prefix_len) != 0) {
+                        continue;
+                    }
+                    if (result_has(result, name)) {
+                        continue;
+                    }
+                    // Check if it's executable
+                    size_t full_len = strlen(dir) + 1 + strlen(name) + 1;
+                    char *full = xmalloc(full_len);
+                    snprintf(full, full_len, "%s/%s", dir, name);
+                    if (access(full, X_OK) == 0) {
+                        result_add(result, name);
+                    }
+                    free(full);
+                }
+                closedir(d);
+            }
+            dir = strtok_r(NULL, ":", &saveptr);
+        }
+        free(path_copy);
+    }
+
+    // Sort matches alphabetically
+    if (result->count > 1) {
+        qsort(result->matches, (size_t)result->count, sizeof(char *),
+              cmp_strings);
+    }
+
     return result;
 }

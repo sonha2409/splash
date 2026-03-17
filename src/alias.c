@@ -70,3 +70,14 @@ void alias_print_all(void) {
         printf("alias %s='%s'\n", aliases[i].name, aliases[i].value);
     }
 }
+
+int alias_count(void) {
+    return num_aliases;
+}
+
+const char *alias_get_name(int index) {
+    if (index < 0 || index >= num_aliases) {
+        return NULL;
+    }
+    return aliases[index].name;
+}

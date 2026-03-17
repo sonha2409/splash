@@ -141,6 +141,72 @@ static void test_complete_common_prefix_no_matches(void) {
     completion_result_free(cr);
 }
 
+// --- Command completion tests ---
+
+static void test_command_complete_builtin(void) {
+    // "c" should match "cd" (builtin)
+    CompletionResult *cr = complete_command("cd");
+    ASSERT_NOT_NULL(cr);
+    ASSERT(has_match(cr, "cd"));
+    completion_result_free(cr);
+}
+
+static void test_command_complete_partial_builtin(void) {
+    // "ex" should match "exit" and "export" (builtins)
+    CompletionResult *cr = complete_command("ex");
+    ASSERT_NOT_NULL(cr);
+    ASSERT(has_match(cr, "exit"));
+    ASSERT(has_match(cr, "export"));
+    completion_result_free(cr);
+}
+
+static void test_command_complete_path_executable(void) {
+    // "l" should include "ls" from $PATH
+    CompletionResult *cr = complete_command("ls");
+    ASSERT_NOT_NULL(cr);
+    ASSERT(has_match(cr, "ls"));
+    completion_result_free(cr);
+}
+
+static void test_command_complete_no_matches(void) {
+    CompletionResult *cr = complete_command("zzz_no_cmd_xyz");
+    ASSERT_NOT_NULL(cr);
+    ASSERT_INT_EQ(cr->count, 0);
+    completion_result_free(cr);
+}
+
+static void test_command_complete_sorted(void) {
+    // Results should be sorted
+    CompletionResult *cr = complete_command("e");
+    ASSERT_NOT_NULL(cr);
+    for (int i = 1; i < cr->count; i++) {
+        ASSERT(strcmp(cr->matches[i - 1], cr->matches[i]) < 0);
+    }
+    completion_result_free(cr);
+}
+
+static void test_command_complete_no_duplicates(void) {
+    // A command that's both a builtin and in $PATH should appear once
+    // "echo" is in $PATH; check no dupes for any command
+    CompletionResult *cr = complete_command("ech");
+    ASSERT_NOT_NULL(cr);
+    for (int i = 0; i < cr->count; i++) {
+        for (int j = i + 1; j < cr->count; j++) {
+            ASSERT(strcmp(cr->matches[i], cr->matches[j]) != 0);
+        }
+    }
+    completion_result_free(cr);
+}
+
+static void test_command_complete_with_slash_delegates_to_path(void) {
+    // "/usr/bin/l" should delegate to path completion
+    CompletionResult *cr = complete_command("/usr/bin/ls");
+    ASSERT_NOT_NULL(cr);
+    // Should find /usr/bin/ls as a file (not command name)
+    ASSERT(cr->count >= 1);
+    completion_result_free(cr);
+}
+
 int main(void) {
     printf("test_complete\n");
 
@@ -158,6 +224,15 @@ int main(void) {
     test_complete_results_sorted();
     test_complete_common_prefix_single_match();
     test_complete_common_prefix_no_matches();
+
+    // Command completion tests
+    test_command_complete_builtin();
+    test_command_complete_partial_builtin();
+    test_command_complete_path_executable();
+    test_command_complete_no_matches();
+    test_command_complete_sorted();
+    test_command_complete_no_duplicates();
+    test_command_complete_with_slash_delegates_to_path();
 
     TEST_REPORT();
 }

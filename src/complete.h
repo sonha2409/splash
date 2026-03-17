@@ -12,6 +12,10 @@ typedef struct {
 // Caller takes ownership and must call completion_result_free().
 CompletionResult *complete_path(const char *prefix);
 
+// Complete a command name prefix from builtins, aliases, and $PATH.
+// Caller takes ownership and must call completion_result_free().
+CompletionResult *complete_command(const char *prefix);
+
 // Free a CompletionResult and all its matches.
 void completion_result_free(CompletionResult *result);
 

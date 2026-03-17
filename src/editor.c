@@ -542,7 +542,29 @@ char *editor_readline(const char *prompt) {
             memcpy(word, buf + word_start, word_len);
             word[word_len] = '\0';
 
-            CompletionResult *cr = complete_path(word);
+            // Determine if this word is in command position:
+            // scan backwards from word_start, skip whitespace,
+            // check if previous non-space char is an operator or start-of-line
+            int is_cmd_pos = 0;
+            if (word_start == 0) {
+                is_cmd_pos = 1;
+            } else {
+                size_t j = word_start;
+                while (j > 0 && (buf[j - 1] == ' ' || buf[j - 1] == '\t')) {
+                    j--;
+                }
+                if (j == 0) {
+                    is_cmd_pos = 1;
+                } else {
+                    char prev = buf[j - 1];
+                    is_cmd_pos = (prev == '|' || prev == ';' ||
+                                  prev == '&' || prev == '(');
+                }
+            }
+
+            CompletionResult *cr = is_cmd_pos
+                ? complete_command(word)
+                : complete_path(word);
             free(word);
 
             if (cr->count == 0) {
