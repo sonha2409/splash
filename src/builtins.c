@@ -7,8 +7,12 @@
 #include <unistd.h>
 
 #include "builtins.h"
+#include "executor.h"
 #include "jobs.h"
 #include "util.h"
+
+#define SOURCE_MAX_DEPTH 16
+static int source_depth = 0;
 
 extern char **environ;
 
@@ -283,6 +287,47 @@ static int builtin_export(SimpleCommand *cmd) {
     return 0;
 }
 
+// source <file>
+static int builtin_source(SimpleCommand *cmd) {
+    if (cmd->argc < 2) {
+        fprintf(stderr, "splash: source: usage: source <file>\n");
+        return 1;
+    }
+
+    if (source_depth >= SOURCE_MAX_DEPTH) {
+        fprintf(stderr, "splash: source: max recursion depth (%d) exceeded\n",
+                SOURCE_MAX_DEPTH);
+        return 1;
+    }
+
+    FILE *f = fopen(cmd->argv[1], "r");
+    if (!f) {
+        fprintf(stderr, "splash: source: %s: %s\n",
+                cmd->argv[1], strerror(errno));
+        return 1;
+    }
+
+    source_depth++;
+    char line[4096];
+    int last_status = 0;
+    while (fgets(line, sizeof(line), f)) {
+        // Strip trailing newline
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') {
+            line[len - 1] = '\0';
+            len--;
+        }
+        if (len == 0) {
+            continue;
+        }
+        last_status = executor_execute_line(line);
+    }
+    source_depth--;
+
+    fclose(f);
+    return last_status;
+}
+
 int builtin_is_builtin(const char *name) {
     return strcmp(name, "exit") == 0 ||
            strcmp(name, "cd") == 0 ||
@@ -292,7 +337,8 @@ int builtin_is_builtin(const char *name) {
            strcmp(name, "printenv") == 0 ||
            strcmp(name, "setenv") == 0 ||
            strcmp(name, "unsetenv") == 0 ||
-           strcmp(name, "export") == 0;
+           strcmp(name, "export") == 0 ||
+           strcmp(name, "source") == 0;
 }
 
 int builtin_execute(SimpleCommand *cmd) {
@@ -307,6 +353,7 @@ int builtin_execute(SimpleCommand *cmd) {
     if (strcmp(name, "setenv") == 0)   return builtin_setenv(cmd);
     if (strcmp(name, "unsetenv") == 0) return builtin_unsetenv(cmd);
     if (strcmp(name, "export") == 0)   return builtin_export(cmd);
+    if (strcmp(name, "source") == 0)   return builtin_source(cmd);
 
     fprintf(stderr, "splash: %s: unknown builtin\n", name);
     return 1;

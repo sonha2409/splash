@@ -44,7 +44,14 @@ The executor checks `builtin_is_builtin()` before forking. For single-command (n
 - `cd -` prints the directory it switches to (the old `$OLDPWD`)
 - `cd` to nonexistent directory prints error with `strerror(errno)`
 
+### File sourcing (Milestone 4)
+- **`source <file>`** — reads file line by line through tokenizer → parser → executor. Supports nested source with a depth guard of 16 levels. Shares the `executor_execute_line()` helper with the REPL loop.
+
+## Architecture Note
+
+The `executor_execute_line()` function in `executor.c` provides a shared entry point for executing a single line of input (tokenize → parse → execute). Both `main.c` (REPL loop) and `builtins.c` (`source`) use this, avoiding code duplication.
+
 ## Testing
 
-- **Integration tests** in `tests/integration/test_m4_builtins.sh` — 17 tests covering all 4.1–4.6 features
-- Tests verify: correct output, error messages for bad usage, variable persistence across commands, unset behavior
+- **Integration tests** in `tests/integration/test_m4_builtins.sh` — 24 tests covering features 4.1–4.7
+- Tests verify: correct output, error messages for bad usage, variable persistence across commands, unset behavior, source execution, nested source, source error handling

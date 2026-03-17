@@ -133,6 +133,45 @@ assert_contains "export VAR= sets empty" "SPLASH_EMPTY=" "$OUT"
 OUT=$(echo "export" | $SHELL_BIN 2>&1)
 assert_contains "export no args lists vars" "export" "$OUT"
 
+# --- 4.7 source ---
+echo "--- 4.7 source ---"
+
+# Basic source: run commands from file
+cat > "$TMPDIR/basic.sh" << 'SCRIPT'
+/bin/echo hello from source
+/bin/echo second line
+SCRIPT
+OUT=$(echo "source $TMPDIR/basic.sh" | $SHELL_BIN 2>&1)
+assert_contains "source runs commands" "hello from source" "$OUT"
+assert_contains "source runs multiple lines" "second line" "$OUT"
+
+# Source sets env vars visible to subsequent commands
+cat > "$TMPDIR/setvar.sh" << 'SCRIPT'
+setenv SPLASH_SOURCED yes
+SCRIPT
+OUT=$(printf "source $TMPDIR/setvar.sh\nprintenv SPLASH_SOURCED\n" | $SHELL_BIN 2>&1)
+assert_contains "source sets env vars" "yes" "$OUT"
+
+# Source nonexistent file
+OUT=$(echo "source /nonexistent_file_xyz.sh" | $SHELL_BIN 2>&1)
+assert_contains "source nonexistent file error" "No such file" "$OUT"
+
+# Source no args
+OUT=$(echo "source" | $SHELL_BIN 2>&1)
+assert_contains "source no args error" "usage" "$OUT"
+
+# Nested source
+cat > "$TMPDIR/inner.sh" << 'SCRIPT'
+/bin/echo from inner
+SCRIPT
+cat > "$TMPDIR/outer.sh" << SCRIPT
+source $TMPDIR/inner.sh
+/bin/echo from outer
+SCRIPT
+OUT=$(echo "source $TMPDIR/outer.sh" | $SHELL_BIN 2>&1)
+assert_contains "nested source inner" "from inner" "$OUT"
+assert_contains "nested source outer" "from outer" "$OUT"
+
 # --- Summary ---
 echo ""
 echo "test_m4_builtins"

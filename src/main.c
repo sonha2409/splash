@@ -3,13 +3,9 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "command.h"
 #include "executor.h"
 #include "jobs.h"
-#include "parser.h"
 #include "signals.h"
-#include "tokenizer.h"
-#include "util.h"
 
 #define MAX_INPUT_LINE 4096
 
@@ -63,17 +59,7 @@ int main(void) {
             continue;
         }
 
-        // Tokenize
-        TokenList *tokens = tokenizer_tokenize(line);
-
-        // Parse
-        Pipeline *pl = parser_parse(tokens);
-        if (pl) {
-            last_status = executor_execute(pl, line);
-            pipeline_free(pl);
-        }
-
-        token_list_free(tokens);
+        last_status = executor_execute_line(line);
     }
 
     (void)last_status;

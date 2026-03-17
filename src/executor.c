@@ -11,7 +11,9 @@
 #include "command.h"
 #include "executor.h"
 #include "jobs.h"
+#include "parser.h"
 #include "signals.h"
+#include "tokenizer.h"
 #include "util.h"
 
 // Apply all redirections for a command. Called in child process before exec.
@@ -280,4 +282,20 @@ int executor_execute(Pipeline *pl, const char *command_str) {
     }
 
     return execute_pipeline_impl(pl, command_str);
+}
+
+int executor_execute_line(const char *line) {
+    if (!line || *line == '\0') {
+        return 0;
+    }
+
+    TokenList *tokens = tokenizer_tokenize(line);
+    Pipeline *pl = parser_parse(tokens);
+    int status = 0;
+    if (pl) {
+        status = executor_execute(pl, line);
+        pipeline_free(pl);
+    }
+    token_list_free(tokens);
+    return status;
 }
