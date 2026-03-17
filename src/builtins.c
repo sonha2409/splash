@@ -883,10 +883,60 @@ static PipelineStage *create_find_stage(SimpleCommand *cmd) {
 }
 
 
+// --- Structured env ---
+
+typedef struct {
+    int yielded;
+} EnvStageState;
+
+static Value *env_stage_next(PipelineStage *self) {
+    EnvStageState *s = self->state;
+    if (s->yielded) {
+        return NULL;
+    }
+    s->yielded = 1;
+
+    const char *col_names[] = {"key", "value"};
+    ValueType col_types[] = {VALUE_STRING, VALUE_STRING};
+    Table *t = table_new(col_names, col_types, 2);
+
+    for (char **env = environ; *env; env++) {
+        char *eq = strchr(*env, '=');
+        if (!eq) {
+            continue;
+        }
+        size_t key_len = (size_t)(eq - *env);
+        char *key = xmalloc(key_len + 1);
+        memcpy(key, *env, key_len);
+        key[key_len] = '\0';
+
+        Value *row[] = {
+            value_string(key),
+            value_string(eq + 1)
+        };
+        table_add_row(t, row, 2);
+        free(key);
+    }
+
+    return value_table(t);
+}
+
+static void env_stage_free(PipelineStage *self) {
+    free(self->state);
+}
+
+static PipelineStage *create_env_stage(void) {
+    EnvStageState *s = xmalloc(sizeof(EnvStageState));
+    s->yielded = 0;
+    return pipeline_stage_new(env_stage_next, env_stage_free, s, NULL);
+}
+
+
 int builtin_is_structured(const char *name) {
     return strcmp(name, "ls") == 0 ||
            strcmp(name, "ps") == 0 ||
-           strcmp(name, "find") == 0;
+           strcmp(name, "find") == 0 ||
+           strcmp(name, "env") == 0;
 }
 
 PipelineStage *builtin_create_stage(SimpleCommand *cmd,
@@ -901,6 +951,9 @@ PipelineStage *builtin_create_stage(SimpleCommand *cmd,
     }
     if (strcmp(name, "find") == 0) {
         return create_find_stage(cmd);
+    }
+    if (strcmp(name, "env") == 0) {
+        return create_env_stage();
     }
     return NULL;
 }

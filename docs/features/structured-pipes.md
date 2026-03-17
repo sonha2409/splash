@@ -377,6 +377,25 @@ Recursive directory walk producing a Table with 4 columns:
 
 ---
 
+## Structured `env` (7.9)
+
+### Design
+
+Simplest structured builtin — iterates the `environ` array and splits each entry on the first `=` to produce `key`/`value` columns.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `key` | STRING | Environment variable name |
+| `value` | STRING | Environment variable value |
+
+Entries without `=` are skipped (shouldn't happen in practice).
+
+### Testing
+
+8 integration test assertions: column headers, separator, standard vars (HOME, PATH, USER), `|>` auto-serialize.
+
+---
+
 ## Auto-serialize (7.5)
 
 ### Design
