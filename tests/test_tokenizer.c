@@ -123,12 +123,11 @@ static void test_tokenizer_parens(void) {
 }
 
 static void test_tokenizer_dollar_paren(void) {
+    // $(whoami) is now expanded inline — produces TOKEN_WORD with output
     TokenList *list = tokenizer_tokenize("echo $(whoami)");
-    ASSERT_INT_EQ(list->count, 5);
+    ASSERT_INT_EQ(list->count, 3); // echo, <output>, EOF
     ASSERT_INT_EQ(list->tokens[0].type, TOKEN_WORD);    // echo
-    ASSERT_INT_EQ(list->tokens[1].type, TOKEN_DOLLAR_PAREN); // $(
-    ASSERT_INT_EQ(list->tokens[2].type, TOKEN_WORD);    // whoami
-    ASSERT_INT_EQ(list->tokens[3].type, TOKEN_RPAREN);  // )
+    ASSERT_INT_EQ(list->tokens[1].type, TOKEN_WORD);    // command subst result
     token_list_free(list);
 }
 

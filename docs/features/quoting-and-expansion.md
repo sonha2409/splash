@@ -71,6 +71,25 @@ The key challenge is distinguishing unquoted `*` from quoted `"*"` after tokeniz
 - `'*.c'` — single-quoted glob characters remain literal
 - `\*` — backslash-escaped glob characters remain literal
 
+## Command Substitution (5.8)
+
+`$(command)` executes the command in a subshell and replaces itself with the captured stdout.
+
+### Mechanism
+
+1. **Tokenizer** (`read_word()`): When `$(` is encountered in unquoted or double-quoted context, `find_matching_paren()` locates the closing `)` (respecting nesting, quotes, escapes).
+2. **Execution** (`expand_command_subst()` in `expand.c`): `pipe()` → `fork()` → child redirects stdout to pipe write end, stdin from `/dev/null` (disables job control), calls `executor_execute_line()`, then `fflush(stdout)` + `_exit()`. Parent reads all output from pipe, strips trailing newlines.
+3. **Nesting**: Works naturally — the child's `executor_execute_line()` calls the tokenizer, which handles inner `$(...)` recursively.
+
+### Behaviors
+
+- Trailing newlines are stripped (standard shell behavior)
+- Empty output → empty string
+- In double quotes: `"$(echo hello world)"` → single word with spaces preserved
+- In single quotes: `'$(cmd)'` → literal, no expansion
+- Failed commands produce empty output; exit status is captured in `$?`
+- Stdin is `/dev/null` in the subshell (prevents job control hangs)
+
 ## Architecture
 
 The expansion pipeline is split across two phases:
@@ -85,3 +104,4 @@ Helper functions in `expand.c` do the actual lookups and filesystem operations.
 - **Unit tests** in `tests/test_expand.c` — 70 tests covering `expand_has_glob()`, `expand_glob_unescape()`, `expand_glob()` with star, question mark, hidden files, no-match, path patterns
 - **Integration tests** in `tests/integration/test_m5_quoting_expansion.sh` — 22 tests for quoting/variables/tilde
 - **Integration tests** in `tests/integration/test_m5_wildcarding.sh` — 11 tests for glob expansion, hidden file exclusion, quoted literal preservation, no-match fallback
+- **Integration tests** in `tests/integration/test_m5_command_subst.sh` — 9 tests for basic subst, nesting, inline in word, double/single quote behavior, empty output

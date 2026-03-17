@@ -1,11 +1,16 @@
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
+#include "executor.h"
 #include "expand.h"
+#include "signals.h"
 #include "util.h"
 
 static int last_status = 0;
@@ -105,6 +110,86 @@ char *expand_tilde(const char *word) {
     memcpy(result + hlen, rest, rlen);
     result[hlen + rlen] = '\0';
     return result;
+}
+
+
+char *expand_command_subst(const char *cmd) {
+    if (!cmd || *cmd == '\0') {
+        return xstrdup("");
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        fprintf(stderr, "splash: command substitution pipe: %s\n",
+                strerror(errno));
+        return xstrdup("");
+    }
+
+    pid_t pid = fork();
+    if (pid == -1) {
+        fprintf(stderr, "splash: command substitution fork: %s\n",
+                strerror(errno));
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return xstrdup("");
+    }
+
+    if (pid == 0) {
+        // Child: redirect stdout to pipe, execute command
+        close(pipefd[0]);
+
+        // Redirect stdin from /dev/null to disable job control
+        // (isatty(STDIN_FILENO) will return false, preventing tcsetpgrp)
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            close(devnull);
+        }
+
+        if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+            close(pipefd[1]);
+            _exit(1);
+        }
+        close(pipefd[1]);
+
+        signals_default();
+        int status = executor_execute_line(cmd);
+        fflush(stdout);
+        _exit(status);
+    }
+
+    // Parent: read all output from child
+    close(pipefd[1]);
+
+    size_t capacity = 256;
+    size_t len = 0;
+    char *output = xmalloc(capacity);
+
+    ssize_t n;
+    char buf[4096];
+    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+        while (len + (size_t)n >= capacity) {
+            capacity *= 2;
+            output = xrealloc(output, capacity);
+        }
+        memcpy(output + len, buf, (size_t)n);
+        len += (size_t)n;
+    }
+    close(pipefd[0]);
+
+    int status;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status)) {
+        expand_set_last_status(WEXITSTATUS(status));
+    }
+
+    // Strip trailing newlines
+    while (len > 0 && output[len - 1] == '\n') {
+        len--;
+    }
+    output[len] = '\0';
+
+    return output;
 }
 
 

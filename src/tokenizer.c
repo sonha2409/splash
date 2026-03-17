@@ -151,6 +151,109 @@ static int read_and_expand_var(const char *input, int pos,
     return 0;
 }
 
+// Find the matching ')' for a '$(' starting at input[pos] (the char after '(').
+// Handles nested $(), single quotes, double quotes, and backslash escapes.
+// Returns the index of the matching ')' or -1 if unterminated.
+static int find_matching_paren(const char *input, int pos) {
+    int depth = 1;
+    int i = pos;
+
+    while (input[i] != '\0' && depth > 0) {
+        char c = input[i];
+
+        if (c == '\\' && input[i + 1] != '\0') {
+            i += 2; // skip escaped character
+            continue;
+        }
+
+        if (c == '\'') {
+            i++; // skip opening quote
+            while (input[i] != '\0' && input[i] != '\'') {
+                i++;
+            }
+            if (input[i] == '\0') {
+                return -1;
+            }
+            i++; // skip closing quote
+            continue;
+        }
+
+        if (c == '"') {
+            i++; // skip opening quote
+            while (input[i] != '\0' && input[i] != '"') {
+                if (input[i] == '\\' && input[i + 1] != '\0') {
+                    i += 2;
+                } else {
+                    i++;
+                }
+            }
+            if (input[i] == '\0') {
+                return -1;
+            }
+            i++; // skip closing quote
+            continue;
+        }
+
+        if (c == '$' && input[i + 1] == '(') {
+            depth++;
+            i += 2;
+            continue;
+        }
+
+        if (c == '(') {
+            depth++;
+            i++;
+            continue;
+        }
+
+        if (c == ')') {
+            depth--;
+            if (depth == 0) {
+                return i;
+            }
+            i++;
+            continue;
+        }
+
+        i++;
+    }
+
+    return -1; // unterminated
+}
+
+// Handle $(...) command substitution starting at input[pos] where input[pos-1]
+// was '$' and input[pos] is '('. Extracts the command, executes it, and appends
+// the output to the word buffer.
+// Returns the number of characters consumed (from the '$'), or -1 for incomplete.
+static int handle_command_subst(const char *input, int dollar_pos,
+                                char **buf, int *buf_len, int *capacity) {
+    int open_pos = dollar_pos + 1; // position of '('
+    int content_start = open_pos + 1; // first char after '('
+    int close_pos = find_matching_paren(input, content_start);
+
+    if (close_pos < 0) {
+        return -1; // unterminated
+    }
+
+    // Extract command between $( and )
+    int cmd_len = close_pos - content_start;
+    char *cmd = xmalloc((size_t)cmd_len + 1);
+    memcpy(cmd, input + content_start, (size_t)cmd_len);
+    cmd[cmd_len] = '\0';
+
+    // Execute and capture output
+    char *output = expand_command_subst(cmd);
+    free(cmd);
+
+    if (output) {
+        buf_append_str(buf, buf_len, capacity, output);
+        free(output);
+    }
+
+    // Return total chars consumed: $( ... ) = close_pos - dollar_pos + 1
+    return close_pos - dollar_pos + 1;
+}
+
 // Read a word token, handling quoting, escapes, and expansions.
 // Returns the number of characters consumed from input, or -1 for incomplete.
 static int read_word(const char *input, int start, char **out_value) {
@@ -194,9 +297,17 @@ static int read_word(const char *input, int start, char **out_value) {
             break;
         }
 
-        // Dollar sign followed by paren is handled at top level
+        // Command substitution in unquoted context
         if (c == '$' && input[i + 1] == '(') {
-            break;
+            int consumed = handle_command_subst(input, i,
+                                                &buf, &buf_len, &capacity);
+            if (consumed < 0) {
+                free(buf);
+                *out_value = NULL;
+                return -1;
+            }
+            i += consumed;
+            continue;
         }
 
         // Variable expansion in unquoted context
@@ -253,7 +364,18 @@ static int read_word(const char *input, int start, char **out_value) {
                         buf_append_char(&buf, &buf_len, &capacity, '\\');
                         i++;
                     }
-                } else if (input[i] == '$' && input[i + 1] != '(') {
+                } else if (input[i] == '$' && input[i + 1] == '(') {
+                    // Command substitution inside double quotes
+                    int consumed = handle_command_subst(input, i,
+                                                       &buf, &buf_len,
+                                                       &capacity);
+                    if (consumed < 0) {
+                        free(buf);
+                        *out_value = NULL;
+                        return -1;
+                    }
+                    i += consumed;
+                } else if (input[i] == '$') {
                     // Variable expansion inside double quotes
                     i++; // skip $
                     int consumed = read_and_expand_var(input, i,
@@ -327,13 +449,6 @@ TokenList *tokenizer_tokenize(const char *input) {
         if (input[i] == '\n') {
             token_list_append(list, TOKEN_NEWLINE, "\n", i, 1);
             i++;
-            continue;
-        }
-
-        // $( — command substitution
-        if (input[i] == '$' && input[i + 1] == '(') {
-            token_list_append(list, TOKEN_DOLLAR_PAREN, "$(", i, 2);
-            i += 2;
             continue;
         }
 

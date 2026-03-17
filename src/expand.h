@@ -41,6 +41,11 @@ char **expand_glob(const char *pattern, int *count);
 // Modifies the string in place.
 void expand_glob_unescape(char *word);
 
+// Execute a command and capture its stdout output.
+// Returns a newly allocated string with trailing newlines stripped.
+// Returns empty string on failure. Caller must free.
+char *expand_command_subst(const char *cmd);
+
 #include "command.h"
 
 // Expand globs in a command's argv. Replaces each arg that contains glob

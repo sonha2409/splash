@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 5 — Quoting, Escaping, and Expansions
-**Last completed feature**: 5.7 Wildcarding
+**Last completed feature**: 5.8 Command substitution
 
 ---
 
@@ -185,7 +185,7 @@ splash/
 | 5.5 | Special variables | `${$}` = PID, `${?}` = last exit code, `${!}` = last bg PID, `${_}` = last arg, `${SHELL}` = binary path | `DONE` | 2026-03-17 | State tracked in expand.c |
 | 5.6 | Tilde expansion | `~` → `$HOME`, `~user` → user's home (via `getpwnam()`), `~user/dir` → home + `/dir` | `DONE` | 2026-03-17 | Only in unquoted word start |
 | 5.7 | Wildcarding | `*` and `?` via `opendir()`/`readdir()` + regex. No expansion inside quotes. Supports paths: `src/*.c` | `DONE` | 2026-03-17 | Sentinel byte approach for quote-awareness |
-| 5.8 | Command substitution | `$(command)` → fork child shell, read stdout, inject back. Strip trailing newlines. Supports nesting. | `TODO` | | |
+| 5.8 | Command substitution | `$(command)` → fork child shell, read stdout, inject back. Strip trailing newlines. Supports nesting. | `DONE` | 2026-03-17 | Inline in tokenizer, /dev/null stdin to disable job control |
 | 5.9 | Process substitution | `<(cmd)` / `>(cmd)` via `mkfifo()` in temp dir. Clean up after. | `STRETCH` | | |
 
 **Verification**: `echo "hello world"` → one arg. `echo '$HOME'` → literal. `echo ${HOME}` → home path. `echo ~` → home. `ls *.c` → C files. `echo $(whoami)` → username.
