@@ -139,8 +139,26 @@ Ctrl-R enters a separate input loop (`do_reverse_search()`) within `editor_readl
 - Ctrl-R at oldest match → no-op (doesn't wrap).
 - Empty history → search shows nothing, Enter returns NULL (no match to accept).
 
+## Autosuggestions (6.7)
+
+### Design
+
+As the user types, the most recent history entry matching the current input as a prefix is shown as greyed-out text after the cursor. Right-arrow, End, or Ctrl-E at end of line accepts the suggestion, filling the buffer with the full entry.
+
+### How it works
+
+- `find_suggestion(buf, len)`: Linear scan backwards through history, finds the first entry where `strncmp(entry, buf, len) == 0` and entry is longer than the current input.
+- Called on every `refresh_line()` invocation — the suggestion suffix is rendered in dim grey (`\x1b[2;37m`).
+- Right-arrow/End/Ctrl-E at end of line: if a suggestion exists, replaces the buffer with the full suggestion text.
+- Tab is intentionally **not** used for autosuggestions — it's reserved for filesystem tab completion (6.9–6.10). This matches fish shell's UX.
+
+### Edge Cases
+
+- No matching history entry → no grey text shown.
+- Cursor not at end of line → Right-arrow moves cursor normally, no suggestion acceptance.
+- After accepting suggestion → no further suggestion shown (exact match, not longer).
+
 ## Future work (later features in M6)
 
-- 6.7: Autosuggestions — will hook into `refresh_line()` to append greyed text.
 - 6.8: Syntax highlighting — will tokenize buffer and emit ANSI codes in `refresh_line()`.
 - 6.9–6.10: Tab completion — will intercept Tab key in the main read loop.

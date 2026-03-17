@@ -84,10 +84,25 @@ static void term_write(const char *s, size_t len) {
     (void)ret;
 }
 
+// Find the most recent history entry that starts with the given prefix.
+// Returns the full entry string (owned by history module), or NULL.
+static const char *find_suggestion(const char *buf, size_t len) {
+    if (len == 0) {
+        return NULL;
+    }
+    for (int i = history_count() - 1; i >= 0; i--) {
+        const char *entry = history_get(i);
+        if (entry && strlen(entry) > len && strncmp(entry, buf, len) == 0) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
 // Refresh the line display: rewrite prompt + buffer from column 0.
+// If suggestion is non-NULL, the suffix after buf is shown in grey.
 static void refresh_line(const char *prompt, const char *buf, size_t len,
-                         size_t pos) {
-    // Move cursor to start of line, write prompt + buffer, clear to end
+                         size_t pos, const char *suggestion) {
     char seq[64];
     int n;
 
@@ -99,6 +114,16 @@ static void refresh_line(const char *prompt, const char *buf, size_t len,
 
     // Write buffer
     term_write(buf, len);
+
+    // Write suggestion suffix in dim grey
+    if (suggestion) {
+        size_t slen = strlen(suggestion);
+        if (slen > len) {
+            term_write("\x1b[2;37m", 7);
+            term_write(suggestion + len, slen - len);
+            term_write("\x1b[0m", 4);
+        }
+    }
 
     // Erase to end of line
     term_write("\x1b[0K", 4);
@@ -337,7 +362,7 @@ char *editor_readline(const char *prompt) {
             if (pos < len) {
                 memmove(buf + pos, buf + pos + 1, len - pos - 1);
                 len--;
-                refresh_line(prompt, buf, len, pos);
+                refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             }
             break;
 
@@ -347,30 +372,46 @@ char *editor_readline(const char *prompt) {
                 memmove(buf + pos - 1, buf + pos, len - pos);
                 pos--;
                 len--;
-                refresh_line(prompt, buf, len, pos);
+                refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             }
             break;
 
         case 1:  // Ctrl-A: move to start
             pos = 0;
-            refresh_line(prompt, buf, len, pos);
+            refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             break;
 
-        case 5:  // Ctrl-E: move to end
+        case 5:  // Ctrl-E: move to end / accept suggestion
+            if (pos == len) {
+                const char *sug = find_suggestion(buf, len);
+                if (sug) {
+                    size_t slen = strlen(sug);
+                    if (slen + 1 > cap) {
+                        cap = slen + 1;
+                        char *nb = realloc(buf, cap);
+                        if (nb) buf = nb;
+                    }
+                    memcpy(buf, sug, slen);
+                    len = slen;
+                    pos = len;
+                    refresh_line(prompt, buf, len, pos, NULL);
+                    break;
+                }
+            }
             pos = len;
-            refresh_line(prompt, buf, len, pos);
+            refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             break;
 
         case 11:  // Ctrl-K: kill to end of line
             len = pos;
-            refresh_line(prompt, buf, len, pos);
+            refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             break;
 
         case 21:  // Ctrl-U: kill to start of line
             memmove(buf, buf + pos, len - pos);
             len -= pos;
             pos = 0;
-            refresh_line(prompt, buf, len, pos);
+            refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             break;
 
         case 18: {  // Ctrl-R: reverse history search
@@ -406,14 +447,14 @@ char *editor_readline(const char *prompt) {
             } else {
                 // SEARCH_CANCEL — restore normal editing
                 free(result);
-                refresh_line(prompt, buf, len, pos);
+                refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             }
             break;
         }
 
         case 12:  // Ctrl-L: clear screen
             term_write("\x1b[H\x1b[2J", 7);
-            refresh_line(prompt, buf, len, pos);
+            refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             break;
 
         case 3:  // Ctrl-C: discard line
@@ -457,7 +498,7 @@ char *editor_readline(const char *prompt) {
                             memcpy(buf, entry, elen);
                             len = elen;
                             pos = len;
-                            refresh_line(prompt, buf, len, pos);
+                            refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
                         }
                     }
                     break;
@@ -481,29 +522,61 @@ char *editor_readline(const char *prompt) {
                             memcpy(buf, entry, elen);
                             len = elen;
                             pos = len;
-                            refresh_line(prompt, buf, len, pos);
+                            refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
                         }
                     }
                     break;
                 case 'C':  // Right arrow
                     if (pos < len) {
                         pos++;
-                        refresh_line(prompt, buf, len, pos);
+                        refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
+                    } else if (pos == len) {
+                        // Accept autosuggestion
+                        const char *sug = find_suggestion(buf, len);
+                        if (sug) {
+                            size_t slen = strlen(sug);
+                            if (slen + 1 > cap) {
+                                cap = slen + 1;
+                                char *nb = realloc(buf, cap);
+                                if (nb) buf = nb;
+                            }
+                            memcpy(buf, sug, slen);
+                            len = slen;
+                            pos = len;
+                            refresh_line(prompt, buf, len, pos, NULL);
+                        }
                     }
                     break;
                 case 'D':  // Left arrow
                     if (pos > 0) {
                         pos--;
-                        refresh_line(prompt, buf, len, pos);
+                        refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
                     }
                     break;
                 case 'H':  // Home
                     pos = 0;
-                    refresh_line(prompt, buf, len, pos);
+                    refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
                     break;
                 case 'F':  // End
+                    if (pos == len) {
+                        // Accept autosuggestion
+                        const char *sug = find_suggestion(buf, len);
+                        if (sug) {
+                            size_t slen = strlen(sug);
+                            if (slen + 1 > cap) {
+                                cap = slen + 1;
+                                char *nb = realloc(buf, cap);
+                                if (nb) buf = nb;
+                            }
+                            memcpy(buf, sug, slen);
+                            len = slen;
+                            pos = len;
+                            refresh_line(prompt, buf, len, pos, NULL);
+                            break;
+                        }
+                    }
                     pos = len;
-                    refresh_line(prompt, buf, len, pos);
+                    refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
                     break;
                 case '3':  // Delete key (ESC [ 3 ~)
                     // Read the trailing '~'
@@ -511,7 +584,7 @@ char *editor_readline(const char *prompt) {
                     if (pos < len) {
                         memmove(buf + pos, buf + pos + 1, len - pos - 1);
                         len--;
-                        refresh_line(prompt, buf, len, pos);
+                        refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
                     }
                     break;
                 default:
@@ -545,7 +618,7 @@ char *editor_readline(const char *prompt) {
                 buf[pos] = c;
                 len++;
                 pos++;
-                refresh_line(prompt, buf, len, pos);
+                refresh_line(prompt, buf, len, pos, find_suggestion(buf, len));
             }
             break;
         }
