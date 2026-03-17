@@ -4,10 +4,20 @@
 #include <unistd.h>
 
 #include "executor.h"
+#include "history.h"
 #include "jobs.h"
 #include "signals.h"
 
 #define MAX_INPUT_LINE 4096
+
+// Source a config file if it exists and is readable.
+static void source_if_exists(const char *path) {
+    if (access(path, R_OK) == 0) {
+        char cmd[4096 + 8];
+        snprintf(cmd, sizeof(cmd), "source %s", path);
+        executor_execute_line(cmd);
+    }
+}
 
 int main(void) {
     char line[MAX_INPUT_LINE];
@@ -29,6 +39,19 @@ int main(void) {
     }
 
     jobs_init();
+    history_init();
+
+    // Auto-source config files (interactive only)
+    if (interactive) {
+        const char *home = getenv("HOME");
+        if (home) {
+            char path[1024];
+            snprintf(path, sizeof(path), "%s/.config/splash/init.sh", home);
+            source_if_exists(path);
+            snprintf(path, sizeof(path), "%s/.shellrc", home);
+            source_if_exists(path);
+        }
+    }
 
     for (;;) {
         if (interactive) {
@@ -59,6 +82,7 @@ int main(void) {
             continue;
         }
 
+        history_add(line);
         last_status = executor_execute_line(line);
     }
 

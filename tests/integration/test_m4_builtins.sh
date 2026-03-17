@@ -232,6 +232,33 @@ assert_contains "which external path" "/ls" "$OUT"
 OUT=$(echo "which cd" | $SHELL_BIN 2>&1)
 assert_contains "which builtin" "built-in" "$OUT"
 
+# --- 4.10 history ---
+echo "--- 4.10 history ---"
+
+OUT=$(printf '/bin/echo first\n/bin/echo second\nhistory\n' | $SHELL_BIN 2>&1)
+assert_contains "history shows first" "1  /bin/echo first" "$OUT"
+assert_contains "history shows second" "2  /bin/echo second" "$OUT"
+assert_contains "history shows itself" "3  history" "$OUT"
+
+# Duplicate suppression
+OUT=$(printf '/bin/echo dup\n/bin/echo dup\nhistory\n' | $SHELL_BIN 2>&1)
+# Should only have one "dup" entry, not two
+assert_contains "history dedup count" "1  /bin/echo dup" "$OUT"
+assert_not_contains "history no dup line 2" "2  /bin/echo dup" "$OUT"
+
+# --- 4.11 auto-source config ---
+echo "--- 4.11 auto-source config ---"
+# Auto-source is interactive-only (requires tty), so we can't fully test
+# it via pipe. Verify it doesn't crash in non-interactive mode.
+CONFDIR="$TMPDIR/autosrc_home/.config/splash"
+mkdir -p "$CONFDIR"
+cat > "$CONFDIR/init.sh" << 'SCRIPT'
+setenv SPLASH_INIT loaded
+SCRIPT
+# Non-interactive: init.sh should NOT be sourced (no tty)
+OUT=$(echo "printenv SPLASH_INIT" | HOME="$TMPDIR/autosrc_home" $SHELL_BIN 2>&1)
+assert_not_contains "auto-source skipped in non-interactive" "loaded" "$OUT"
+
 # --- Summary ---
 echo ""
 echo "test_m4_builtins"

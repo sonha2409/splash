@@ -9,6 +9,7 @@
 #include "alias.h"
 #include "builtins.h"
 #include "executor.h"
+#include "history.h"
 #include "jobs.h"
 #include "util.h"
 
@@ -478,6 +479,12 @@ static int builtin_unalias(SimpleCommand *cmd) {
     return 0;
 }
 
+// history
+static int builtin_history(void) {
+    history_print();
+    return 0;
+}
+
 int builtin_is_builtin(const char *name) {
     return strcmp(name, "exit") == 0 ||
            strcmp(name, "cd") == 0 ||
@@ -492,7 +499,8 @@ int builtin_is_builtin(const char *name) {
            strcmp(name, "alias") == 0 ||
            strcmp(name, "unalias") == 0 ||
            strcmp(name, "type") == 0 ||
-           strcmp(name, "which") == 0;
+           strcmp(name, "which") == 0 ||
+           strcmp(name, "history") == 0;
 }
 
 int builtin_execute(SimpleCommand *cmd) {
@@ -512,6 +520,7 @@ int builtin_execute(SimpleCommand *cmd) {
     if (strcmp(name, "unalias") == 0)  return builtin_unalias(cmd);
     if (strcmp(name, "type") == 0)     return builtin_type(cmd);
     if (strcmp(name, "which") == 0)    return builtin_which(cmd);
+    if (strcmp(name, "history") == 0)  return builtin_history();
 
     fprintf(stderr, "splash: %s: unknown builtin\n", name);
     return 1;

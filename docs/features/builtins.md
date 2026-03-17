@@ -47,11 +47,30 @@ The executor checks `builtin_is_builtin()` before forking. For single-command (n
 ### File sourcing (Milestone 4)
 - **`source <file>`** — reads file line by line through tokenizer → parser → executor. Supports nested source with a depth guard of 16 levels. Shares the `executor_execute_line()` helper with the REPL loop.
 
+### Aliases (Milestone 4)
+- **`alias [name[='value']]`** — no args: print all. With `name=value`: store alias. With `name`: print that alias.
+- **`unalias name`** — remove an alias.
+- Expansion happens at string level in `executor_execute_line()` before tokenizing. Depth limit of 16 prevents infinite loops.
+
+### Introspection (Milestone 4)
+- **`type name`** — prints whether name is alias, builtin, or external (with path). Checks alias → builtin → PATH.
+- **`which name`** — similar but terser output (just path for externals).
+- PATH search uses `access(path, X_OK)` across `$PATH` directories.
+
+### History (Milestone 4)
+- **`history`** — prints all history entries with line numbers.
+- In-memory buffer of 1000 entries. Consecutive duplicates suppressed.
+- History module (`history.c/h`) lays groundwork for M6 persistence.
+
+### Auto-source config (Milestone 4)
+- On interactive startup, sources `~/.config/splash/init.sh` then `~/.shellrc` if they exist.
+- Uses `access(path, R_OK)` to check before sourcing.
+
 ## Architecture Note
 
-The `executor_execute_line()` function in `executor.c` provides a shared entry point for executing a single line of input (tokenize → parse → execute). Both `main.c` (REPL loop) and `builtins.c` (`source`) use this, avoiding code duplication.
+The `executor_execute_line()` function in `executor.c` provides a shared entry point for executing a single line of input (tokenize → parse → execute). Both `main.c` (REPL loop) and `builtins.c` (`source`) use this, avoiding code duplication. Alias expansion also happens here.
 
 ## Testing
 
-- **Integration tests** in `tests/integration/test_m4_builtins.sh` — 24 tests covering features 4.1–4.7
-- Tests verify: correct output, error messages for bad usage, variable persistence across commands, unset behavior, source execution, nested source, source error handling
+- **Integration tests** in `tests/integration/test_m4_builtins.sh` — 44 tests covering all 4.1–4.11 features
+- Tests verify: correct output, error messages for bad usage, variable persistence, source execution, nested source, alias expansion/shadowing, type/which lookup, history recording/dedup, auto-source behavior
