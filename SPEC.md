@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 7 — Structured Data Pipes (Novel Feature)
-**Last completed feature**: 7.3 |> operator
+**Last completed feature**: 7.4 Lazy iterator protocol
 
 ---
 
@@ -224,7 +224,7 @@ splash/
 | 7.1 | `Value` type | Tagged union: `STRING`, `INT`, `FLOAT`, `BOOL`, `NIL`, `TABLE`, `LIST`. Constructor/destructor functions. | `DONE` | 2026-03-17 | 78 test assertions, includes ValueList with nested support |
 | 7.2 | `Table` type | Column names + types, row storage. Pretty-print with aligned columns and header separators. | `DONE` | 2026-03-17 | 61 test assertions, Unicode box-drawing separator, right-aligned numbers |
 | 7.3 | `\|>` operator | Tokenizer and parser recognize `\|>` as distinct from `\|`. | `DONE` | 2026-03-17 | Tokenizer already had TOKEN_PIPE_STRUCTURED; parser now tracks PipeType per connection |
-| 7.4 | Lazy iterator protocol | Each stage implements `next()` → `Value` or `NIL`. Upstream only called when downstream pulls. | `TODO` | | |
+| 7.4 | Lazy iterator protocol | Each stage implements `next()` → `Value` or `NIL`. Upstream only called when downstream pulls. | `DONE` | 2026-03-17 | PipelineStage with next/free/state/upstream; drain prints tables or values; 57 test assertions |
 | 7.5 | Auto-serialize | `\|>` into external command → render table as text (column-aligned). | `TODO` | | |
 | 7.6 | Built-in `ls` (structured) | Table: `name`, `size`, `permissions`, `modified`, `type`. Uses `stat()` + `readdir()`. | `TODO` | | |
 | 7.7 | Built-in `ps` (structured) | Table: `pid`, `name`, `cpu`, `mem`, `status`. Uses `sysctl` on macOS. | `TODO` | | |

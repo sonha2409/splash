@@ -182,3 +182,72 @@ NIL cells render as empty strings (not "nil").
 - Free: NULL safety
 - Print: header/data presence, separator character, right-alignment of numbers, NIL cells as empty
 - Value wrapper: constructor, clone integration
+
+---
+
+## Lazy Iterator Protocol (7.4)
+
+### Design
+
+Structured pipelines use **pull-based lazy evaluation**. Each stage is an iterator that only computes the next value when downstream asks for it.
+
+```c
+typedef struct PipelineStage {
+    Value *(*next)(struct PipelineStage *self);   // Pull next value, NULL = done
+    void (*free_fn)(struct PipelineStage *self);  // Free stage-specific state
+    void *state;                                   // Opaque per-stage data
+    struct PipelineStage *upstream;                // Source stage (NULL for roots)
+} PipelineStage;
+```
+
+### Why pull-based?
+
+- **Lazy**: If `first 5` only needs 5 rows, upstream never produces more. A structured `ls` on a million-file directory stops after 5 iterations.
+- **Simple**: No threading, no buffering, no backpressure. Just function calls on the stack.
+- **Composable**: Stages snap together — each only knows about its `next()` contract and its upstream.
+
+### Stage types
+
+- **Source** (upstream = NULL): Generates values from system data. Examples: structured `ls`, `ps`, `env`.
+- **Filter** (upstream != NULL): Transforms or filters upstream values. Examples: `where`, `sort`, `select`, `first`.
+
+### Execution flow
+
+```
+downstream.next()
+  → calls upstream.next()
+    → calls upstream.next()
+      → source produces value
+    ← filter transforms value
+  ← returns to caller
+```
+
+### API
+
+| Function | Description |
+|----------|-------------|
+| `pipeline_stage_new(next, free, state, upstream)` | Create a stage |
+| `pipeline_stage_drain(stage, out)` | Pull all values, print, then free |
+| `pipeline_stage_free(stage)` | Free stage chain recursively |
+
+`pipeline_stage_drain()` handles output formatting:
+- `VALUE_TABLE` → `table_print()` (pretty-printed columns)
+- All other types → `value_to_string()` + newline
+
+### Memory ownership
+
+- `pipeline_stage_new()` takes ownership of `upstream` and `state`.
+- `pipeline_stage_free()` recursively frees the entire chain (upstream first, then current stage).
+- `pipeline_stage_drain()` consumes the stage — calls `pipeline_stage_free()` when done.
+- Each `Value*` returned by `next()` is owned by the caller.
+
+### Testing
+
+57 assertions using mock stages:
+- Int source: yields 0..N-1, then NULL; verified sequential and lazy pull
+- Double filter: transforms each upstream value (x*2)
+- Even filter: skips odd values, demonstrating conditional pull
+- Chained filters: source → even → double, verified correct composition
+- Lazy evaluation: confirmed source only advances when pulled (100-item source, only 2 pulled)
+- Drain: verified output for ints (line-per-value), tables (pretty-printed), empty, and NULL
+- Free: NULL safety for both free and drain
