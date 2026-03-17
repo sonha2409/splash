@@ -259,6 +259,56 @@ Variant of `pipeline_stage_drain()` that writes to a raw file descriptor instead
 
 ---
 
+## Structured `ls` (7.6)
+
+### Design
+
+The first structured builtin. `ls` produces a `Table` with 5 columns:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `name` | STRING | File/directory name |
+| `size` | INT | Size in bytes |
+| `permissions` | STRING | `rwxr-xr-x` format |
+| `modified` | STRING | `YYYY-MM-DD HH:MM` format |
+| `type` | STRING | `file`, `dir`, `symlink`, `fifo`, `socket`, `block`, `char` |
+
+### Dual behavior
+
+- **Standalone or `|>`**: Uses the structured builtin — produces a table, pretty-printed or piped as structured data.
+- **Text pipe `|`**: Falls through to `/bin/ls` via `execvp()`, since `ls` is not registered in `builtin_is_builtin()`.
+
+### Implementation
+
+- `builtin_is_structured("ls")` → returns 1
+- `create_ls_stage()` → creates a `PipelineStage` with `LsStageState`
+- The stage's `next()` function:
+  1. Opens directory with `opendir()` (or stats single file with `lstat()`)
+  2. Iterates entries, calling `lstat()` on each
+  3. Skips `.` and `..`, includes dotfiles
+  4. Builds a Table with all entries, returns it as `VALUE_TABLE`
+  5. Returns NULL on subsequent calls (single-yield source)
+
+### Edge cases
+
+- **Single file argument**: `ls file.txt` → 1-row table with that file's info
+- **Nonexistent path**: Error message to stderr, returns empty table
+- **Unstateable entries**: Silently skipped (e.g., broken symlinks in some cases)
+- **Symlinks**: Uses `lstat()` so symlinks show as type `symlink` rather than their target type
+
+### Testing
+
+18 integration test assertions:
+- Column headers present (name, size, permissions, modified, type)
+- Files and directories listed, dotfiles included
+- Type strings correct (file, dir)
+- `.` and `..` excluded
+- Single file argument works
+- Nonexistent path shows error
+- `ls |> cat` auto-serializes through pipe
+
+---
+
 ## Auto-serialize (7.5)
 
 ### Design

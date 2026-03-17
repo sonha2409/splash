@@ -1,9 +1,12 @@
+#include <dirent.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "alias.h"
@@ -11,6 +14,7 @@
 #include "executor.h"
 #include "history.h"
 #include "jobs.h"
+#include "table.h"
 #include "util.h"
 
 #define SOURCE_MAX_DEPTH 16
@@ -526,16 +530,159 @@ int builtin_execute(SimpleCommand *cmd) {
     return 1;
 }
 
+// --- Structured builtins ---
+
+// Format a permission mode into a string like "rwxr-xr-x".
+// buf must be at least 10 bytes.
+static void format_permissions(mode_t mode, char *buf) {
+    buf[0] = (mode & S_IRUSR) ? 'r' : '-';
+    buf[1] = (mode & S_IWUSR) ? 'w' : '-';
+    buf[2] = (mode & S_IXUSR) ? 'x' : '-';
+    buf[3] = (mode & S_IRGRP) ? 'r' : '-';
+    buf[4] = (mode & S_IWGRP) ? 'w' : '-';
+    buf[5] = (mode & S_IXGRP) ? 'x' : '-';
+    buf[6] = (mode & S_IROTH) ? 'r' : '-';
+    buf[7] = (mode & S_IWOTH) ? 'w' : '-';
+    buf[8] = (mode & S_IXOTH) ? 'x' : '-';
+    buf[9] = '\0';
+}
+
+// Return a static string for the file type from stat mode.
+static const char *file_type_string(mode_t mode) {
+    if (S_ISDIR(mode))  return "dir";
+    if (S_ISLNK(mode))  return "symlink";
+    if (S_ISFIFO(mode)) return "fifo";
+    if (S_ISSOCK(mode)) return "socket";
+    if (S_ISBLK(mode))  return "block";
+    if (S_ISCHR(mode))  return "char";
+    return "file";
+}
+
+// State for structured ls pipeline stage.
+typedef struct {
+    int yielded;        // 0 = table not yet built/returned, 1 = done
+    char *path;         // Directory path (owned)
+} LsStageState;
+
+static Value *ls_stage_next(PipelineStage *self) {
+    LsStageState *s = self->state;
+    if (s->yielded) {
+        return NULL;
+    }
+    s->yielded = 1;
+
+    const char *col_names[] = {"name", "size", "permissions", "modified", "type"};
+    ValueType col_types[] = {
+        VALUE_STRING, VALUE_INT, VALUE_STRING, VALUE_STRING, VALUE_STRING
+    };
+    Table *t = table_new(col_names, col_types, 5);
+
+    // Check if path is a single file (not a directory)
+    struct stat path_st;
+    if (lstat(s->path, &path_st) == -1) {
+        fprintf(stderr, "splash: ls: %s: %s\n", s->path, strerror(errno));
+        return value_table(t); // Return empty table
+    }
+
+    if (!S_ISDIR(path_st.st_mode)) {
+        // Single file — return 1-row table
+        char perms[10];
+        format_permissions(path_st.st_mode, perms);
+        char timebuf[64];
+        struct tm *tm = localtime(&path_st.st_mtime);
+        strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M", tm);
+
+        Value *row[] = {
+            value_string(s->path),
+            value_int(path_st.st_size),
+            value_string(perms),
+            value_string(timebuf),
+            value_string(file_type_string(path_st.st_mode))
+        };
+        table_add_row(t, row, 5);
+        return value_table(t);
+    }
+
+    DIR *dir = opendir(s->path);
+    if (!dir) {
+        fprintf(stderr, "splash: ls: %s: %s\n", s->path, strerror(errno));
+        return value_table(t); // Return empty table
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        // Skip . and ..
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        // Build full path for stat
+        size_t path_len = strlen(s->path);
+        size_t name_len = strlen(entry->d_name);
+        char *full = xmalloc(path_len + 1 + name_len + 1);
+        memcpy(full, s->path, path_len);
+        full[path_len] = '/';
+        memcpy(full + path_len + 1, entry->d_name, name_len);
+        full[path_len + 1 + name_len] = '\0';
+
+        struct stat st;
+        if (lstat(full, &st) == -1) {
+            free(full);
+            continue; // Skip entries we can't stat
+        }
+        free(full);
+
+        char perms[10];
+        format_permissions(st.st_mode, perms);
+
+        char timebuf[64];
+        struct tm *tm = localtime(&st.st_mtime);
+        strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M", tm);
+
+        Value *row[] = {
+            value_string(entry->d_name),
+            value_int(st.st_size),
+            value_string(perms),
+            value_string(timebuf),
+            value_string(file_type_string(st.st_mode))
+        };
+        table_add_row(t, row, 5);
+    }
+    closedir(dir);
+
+    return value_table(t);
+}
+
+static void ls_stage_free(PipelineStage *self) {
+    LsStageState *s = self->state;
+    free(s->path);
+    free(s);
+}
+
+static PipelineStage *create_ls_stage(SimpleCommand *cmd) {
+    const char *path = ".";
+    if (cmd->argc > 1) {
+        path = cmd->argv[1];
+    }
+    LsStageState *s = xmalloc(sizeof(LsStageState));
+    s->yielded = 0;
+    s->path = xstrdup(path);
+    return pipeline_stage_new(ls_stage_next, ls_stage_free, s, NULL);
+}
+
+
 int builtin_is_structured(const char *name) {
-    // Structured builtins will be added in 7.6+
-    (void)name;
-    return 0;
+    return strcmp(name, "ls") == 0;
 }
 
 PipelineStage *builtin_create_stage(SimpleCommand *cmd,
                                     PipelineStage *upstream) {
-    // Structured builtins will be added in 7.6+
-    (void)cmd;
+    const char *name = cmd->argv[0];
+    if (strcmp(name, "ls") == 0) {
+        pipeline_stage_free(upstream); // ls is a source, no upstream
+        return create_ls_stage(cmd);
+    }
     pipeline_stage_free(upstream);
     return NULL;
 }
