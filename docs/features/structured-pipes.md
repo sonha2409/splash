@@ -309,6 +309,47 @@ The first structured builtin. `ls` produces a `Table` with 5 columns:
 
 ---
 
+## Structured `ps` (7.7)
+
+### Design
+
+Structured `ps` lists all visible processes as a Table using macOS `libproc` APIs.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `pid` | INT | Process ID |
+| `name` | STRING | Process name from `proc_name()` |
+| `cpu_time` | FLOAT | Total CPU time in seconds (user + system) |
+| `mem` | INT | Resident memory in bytes |
+| `status` | STRING | `idle`, `running`, `sleeping`, `stopped`, `zombie`, `unknown` |
+
+### Implementation
+
+Uses three `libproc` calls:
+1. `proc_listallpids(NULL, 0)` — get estimated process count
+2. `proc_listallpids(pids, size)` — fill pid array
+3. For each pid: `proc_name()`, `proc_pidinfo(PROC_PIDTASKINFO)` for CPU/mem, `proc_pidinfo(PROC_PIDTBSDINFO)` for status
+
+Processes where `proc_name()` fails (permission denied) are silently skipped — this is expected behavior for processes owned by other users.
+
+### Edge cases
+
+- Pid 0 (kernel_task) skipped — `proc_name()` returns empty
+- Permission-denied processes: skipped gracefully
+- CPU time is total accumulated (user + system) in seconds, not a percentage — avoids the need for sampling
+- `ps | grep` falls through to `/bin/ps` via `execvp()`
+
+### Testing
+
+10 integration test assertions:
+- All 5 column headers present
+- Separator line present
+- At least one `running` process listed
+- `splash` process visible
+- `ps |> cat` auto-serializes correctly
+
+---
+
 ## Auto-serialize (7.5)
 
 ### Design

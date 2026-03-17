@@ -1,9 +1,11 @@
 #include <dirent.h>
 #include <errno.h>
+#include <libproc.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/proc_info.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -672,17 +674,123 @@ static PipelineStage *create_ls_stage(SimpleCommand *cmd) {
 }
 
 
+// --- Structured ps ---
+
+// Map macOS process status to a human-readable string.
+static const char *proc_status_string(unsigned int status) {
+    switch (status) {
+        case 1: return "idle";
+        case 2: return "running";
+        case 3: return "sleeping";
+        case 4: return "stopped";
+        case 5: return "zombie";
+        default: return "unknown";
+    }
+}
+
+typedef struct {
+    int yielded;
+} PsStageState;
+
+static Value *ps_stage_next(PipelineStage *self) {
+    PsStageState *s = self->state;
+    if (s->yielded) {
+        return NULL;
+    }
+    s->yielded = 1;
+
+    const char *col_names[] = {"pid", "name", "cpu_time", "mem", "status"};
+    ValueType col_types[] = {
+        VALUE_INT, VALUE_STRING, VALUE_FLOAT, VALUE_INT, VALUE_STRING
+    };
+    Table *t = table_new(col_names, col_types, 5);
+
+    // Get list of all pids
+    int est = proc_listallpids(NULL, 0);
+    if (est <= 0) {
+        return value_table(t);
+    }
+
+    size_t buf_count = (size_t)est * 2;
+    pid_t *pids = xmalloc(sizeof(pid_t) * buf_count);
+    int actual = proc_listallpids(pids, (int)(sizeof(pid_t) * buf_count));
+    if (actual <= 0) {
+        free(pids);
+        return value_table(t);
+    }
+
+    for (int i = 0; i < actual; i++) {
+        pid_t pid = pids[i];
+        if (pid == 0) {
+            continue;
+        }
+
+        char name[256];
+        int name_len = proc_name(pid, name, sizeof(name));
+        if (name_len <= 0) {
+            // Can't get name — likely permission denied, skip
+            continue;
+        }
+
+        struct proc_taskinfo ti;
+        int ti_sz = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &ti,
+                                 (int)sizeof(ti));
+
+        struct proc_bsdinfo bi;
+        int bi_sz = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bi,
+                                 (int)sizeof(bi));
+
+        double cpu_time = 0.0;
+        int64_t mem = 0;
+        if (ti_sz >= (int)sizeof(ti)) {
+            cpu_time = (double)(ti.pti_total_user + ti.pti_total_system) / 1e9;
+            mem = (int64_t)ti.pti_resident_size;
+        }
+
+        const char *status_str = "unknown";
+        if (bi_sz >= (int)sizeof(bi)) {
+            status_str = proc_status_string(bi.pbi_status);
+        }
+
+        Value *row[] = {
+            value_int(pid),
+            value_string(name),
+            value_float(cpu_time),
+            value_int(mem),
+            value_string(status_str)
+        };
+        table_add_row(t, row, 5);
+    }
+
+    free(pids);
+    return value_table(t);
+}
+
+static void ps_stage_free(PipelineStage *self) {
+    free(self->state);
+}
+
+static PipelineStage *create_ps_stage(void) {
+    PsStageState *s = xmalloc(sizeof(PsStageState));
+    s->yielded = 0;
+    return pipeline_stage_new(ps_stage_next, ps_stage_free, s, NULL);
+}
+
+
 int builtin_is_structured(const char *name) {
-    return strcmp(name, "ls") == 0;
+    return strcmp(name, "ls") == 0 ||
+           strcmp(name, "ps") == 0;
 }
 
 PipelineStage *builtin_create_stage(SimpleCommand *cmd,
                                     PipelineStage *upstream) {
     const char *name = cmd->argv[0];
+    pipeline_stage_free(upstream); // All current structured builtins are sources
     if (strcmp(name, "ls") == 0) {
-        pipeline_stage_free(upstream); // ls is a source, no upstream
         return create_ls_stage(cmd);
     }
-    pipeline_stage_free(upstream);
+    if (strcmp(name, "ps") == 0) {
+        return create_ps_stage();
+    }
     return NULL;
 }

@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 7 — Structured Data Pipes (Novel Feature)
-**Last completed feature**: 7.6 Built-in ls (structured)
+**Last completed feature**: 7.7 Built-in ps (structured)
 
 ---
 
@@ -227,7 +227,7 @@ splash/
 | 7.4 | Lazy iterator protocol | Each stage implements `next()` → `Value` or `NIL`. Upstream only called when downstream pulls. | `DONE` | 2026-03-17 | PipelineStage with next/free/state/upstream; drain prints tables or values; 57 test assertions |
 | 7.5 | Auto-serialize | `\|>` into external command → render table as text (column-aligned). | `DONE` | 2026-03-17 | drain_to_fd + executor bridge; graceful fallback when no structured source |
 | 7.6 | Built-in `ls` (structured) | Table: `name`, `size`, `permissions`, `modified`, `type`. Uses `stat()` + `readdir()`. | `DONE` | 2026-03-17 | lstat for symlinks, skips ./.. shows dotfiles, single-file support, |> auto-serialize works |
-| 7.7 | Built-in `ps` (structured) | Table: `pid`, `name`, `cpu`, `mem`, `status`. Uses `sysctl` on macOS. | `TODO` | | |
+| 7.7 | Built-in `ps` (structured) | Table: `pid`, `name`, `cpu_time`, `mem`, `status`. Uses `libproc` on macOS. | `DONE` | 2026-03-17 | cpu_time (total seconds) instead of cpu%, proc_listallpids + proc_pidinfo |
 | 7.8 | Built-in `find` (structured) | Table: `path`, `name`, `size`, `type`. Recursive directory walk. | `TODO` | | |
 | 7.9 | Built-in `env` (structured) | Table: `key`, `value` from environment. | `TODO` | | |
 | 7.10 | `where` filter | `where <col> <op> <val>`. Ops: `==`, `!=`, `>`, `<`, `>=`, `<=`, `=~` (regex). | `TODO` | | |
