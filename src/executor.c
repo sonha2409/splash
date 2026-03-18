@@ -724,6 +724,35 @@ static int execute_if_command(IfCommand *cmd, const char *command_str) {
     return 0;
 }
 
+// Execute a for/in/do/done loop.
+// Expands globs on the word list, then iterates: sets the variable and
+// re-evaluates the body source text for each word (so $var expansions work).
+static int execute_for_command(ForCommand *cmd,
+                               const char *command_str __attribute__((unused))) {
+    int status = 0;
+    for (int i = 0; i < cmd->num_words; i++) {
+        // Expand globs on each word
+        int count = 0;
+        char **expanded = expand_glob(cmd->words[i], &count);
+        if (expanded) {
+            for (int j = 0; j < count; j++) {
+                expand_glob_unescape(expanded[j]);
+                setenv(cmd->var_name, expanded[j], 1);
+                status = executor_execute_line(cmd->body_src);
+                free(expanded[j]);
+            }
+            free(expanded);
+        } else {
+            char *word = xstrdup(cmd->words[i]);
+            expand_glob_unescape(word);
+            setenv(cmd->var_name, word, 1);
+            status = executor_execute_line(cmd->body_src);
+            free(word);
+        }
+    }
+    return status;
+}
+
 // Execute a single node (pipeline or compound command).
 static int execute_node(Node *node, const char *command_str) {
     switch (node->type) {
@@ -731,6 +760,8 @@ static int execute_node(Node *node, const char *command_str) {
             return execute_pipeline_entry(node->pipeline, command_str);
         case NODE_IF:
             return execute_if_command(node->if_cmd, command_str);
+        case NODE_FOR:
+            return execute_for_command(node->for_cmd, command_str);
     }
     return 0;
 }
@@ -779,7 +810,7 @@ int executor_execute_line(const char *line) {
     }
 
     TokenList *tokens = tokenizer_tokenize(effective);
-    CommandList *list = parser_parse(tokens);
+    CommandList *list = parser_parse(tokens, effective);
     int status = 0;
     if (list) {
         status = executor_execute_list(list, effective);

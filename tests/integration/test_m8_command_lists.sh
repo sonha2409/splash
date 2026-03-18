@@ -135,6 +135,36 @@ assert_eq "nested if" "b" "$OUT"
 OUT=$(echo 'if true; then echo hello | tr a-z A-Z; fi' | $SHELL_BIN 2>/dev/null)
 assert_eq "if: pipe in body" "HELLO" "$OUT"
 
+# --- for/in/do/done ---
+
+OUT=$(echo 'for x in a b c; do echo $x; done' | $SHELL_BIN 2>/dev/null)
+assert_eq "for: basic iteration" "a
+b
+c" "$OUT"
+
+OUT=$(echo 'for x in hello; do echo $x world; done' | $SHELL_BIN 2>/dev/null)
+assert_eq "for: single word" "hello world" "$OUT"
+
+OUT=$(echo 'for x in ; do echo $x; done' | $SHELL_BIN 2>/dev/null)
+assert_eq "for: empty word list" "" "$OUT"
+
+OUT=$(echo 'for x in a b; do echo $x; done ; echo end' | $SHELL_BIN 2>/dev/null)
+assert_eq "for then semicolon" "a
+b
+end" "$OUT"
+
+OUT=$(echo 'for x in a b; do echo $x | tr a-z A-Z; done' | $SHELL_BIN 2>/dev/null)
+assert_eq "for: pipe in body" "A
+B" "$OUT"
+
+OUT=$(echo 'if true; then for x in 1 2; do echo $x; done; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "for: nested in if" "1
+2" "$OUT"
+
+OUT=$(echo 'for x in a b; do if true; then echo $x; fi; done' | $SHELL_BIN 2>/dev/null)
+assert_eq "if: nested in for" "a
+b" "$OUT"
+
 # --- Summary ---
 echo ""
 echo "  Results: $PASS passed, $FAIL failed"

@@ -1,10 +1,11 @@
 #ifndef SPLASH_COMMAND_H
 #define SPLASH_COMMAND_H
 
-// Forward declarations for mutual recursion (IfCommand contains CommandList,
-// CommandList contains Node, Node contains IfCommand).
+// Forward declarations for mutual recursion (compound commands contain
+// CommandList, CommandList contains Node, Node contains compound commands).
 typedef struct CommandList CommandList;
 typedef struct IfCommand IfCommand;
+typedef struct ForCommand ForCommand;
 
 typedef enum {
     REDIRECT_OUTPUT,       // >   stdout to file (truncate)
@@ -83,6 +84,7 @@ typedef enum {
 typedef enum {
     NODE_PIPELINE,
     NODE_IF,
+    NODE_FOR,
 } NodeType;
 
 typedef struct {
@@ -90,6 +92,7 @@ typedef struct {
     union {
         Pipeline *pipeline;    // NODE_PIPELINE (owned)
         IfCommand *if_cmd;     // NODE_IF (owned)
+        ForCommand *for_cmd;   // NODE_FOR (owned)
     };
 } Node;
 
@@ -113,6 +116,9 @@ void command_list_add_pipeline(CommandList *list, Pipeline *pl);
 // Append an if-command to the list. Ownership of if_cmd is transferred to list.
 void command_list_add_if(CommandList *list, IfCommand *if_cmd);
 
+// Append a for-command to the list. Ownership of for_cmd is transferred to list.
+void command_list_add_for(CommandList *list, ForCommand *for_cmd);
+
 // Record the operator between the last two entries added.
 // Must be called after adding the second entry.
 void command_list_add_operator(CommandList *list, ListOpType op);
@@ -133,6 +139,24 @@ struct IfCommand {
     int clause_capacity;
     CommandList *else_body;   // NULL if no else block (owned)
 };
+
+// for var in word...; do commands; done
+struct ForCommand {
+    char *var_name;           // Loop variable name (owned)
+    char **words;             // Word list to iterate over (owned strings)
+    int num_words;
+    int word_capacity;
+    char *body_src;           // Raw source text of body (re-tokenized each iteration, owned)
+};
+
+// Creates a new empty ForCommand. Caller takes ownership.
+ForCommand *for_command_new(const char *var_name);
+
+// Append a word to the for-command's word list. The string is copied.
+void for_command_add_word(ForCommand *cmd, const char *word);
+
+// Free a ForCommand and all its data.
+void for_command_free(ForCommand *cmd);
 
 // Creates a new empty IfCommand. Caller takes ownership.
 IfCommand *if_command_new(void);

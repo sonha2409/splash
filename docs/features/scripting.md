@@ -90,3 +90,37 @@ New types in `command.h`:
 
 - **Unit tests** (10 new in `test_parser.c`): basic if, if-else, if-elif-else, nested if, compound conditions, multi-body, error cases (missing then/fi)
 - **Integration tests** (13 new in `test_m8_command_lists.sh`): all branches, nesting, pipes in body, && with if-blocks
+
+## 8.3 `for` Loop
+
+### Design
+
+```
+for var in word...; do commands; done
+```
+
+The word list supports glob expansion (`for f in *.c`). The body is re-evaluated on each iteration so `$var` expansions reflect the current loop variable.
+
+### Implementation
+
+**New AST node**: `ForCommand` with var name, word list, and **raw body source text** (`body_src`). Added `NODE_FOR` to the `Node` tagged union.
+
+**Key design decision — raw body text**: The tokenizer expands `$var` at tokenization time. For loops that set a variable and re-use it in the body, this means the body must be re-tokenized each iteration. `ForCommand` stores the raw source text of the body (extracted via token position offsets from the original input). The executor calls `executor_execute_line(body_src)` on each iteration, which re-tokenizes and re-expands variables.
+
+This required adding the original input string as a parameter to `parser_parse(tokens, input)`.
+
+**Parser**: Recognizes `for` keyword → expects var name → `in` → collects WORD tokens until `;`/newline/`do` → expects `do` → parses body (via `parse_command_list_until`) to validate and advance past it, then extracts raw source via token positions → expects `done`.
+
+**Executor**: `execute_for_command()` iterates the word list, expanding globs on each word via `expand_glob()`, sets the variable via `setenv()`, and calls `executor_execute_line(body_src)`.
+
+### Edge Cases
+
+- **Glob expansion**: `for f in *.c; do echo $f; done` — each word is glob-expanded before iteration
+- **Empty word list**: `for x in ; do echo $x; done` — zero iterations
+- **Nested**: `if true; then for x in a b; do echo $x; done; fi` and vice versa
+- **Multiple body commands**: `for x in a b; do echo $x; echo ok; done`
+
+### Testing
+
+- **Unit tests** (8 new in `test_parser.c`): basic, multi-body, with list ops, empty words, nested in if, error cases (missing in/do/done)
+- **Integration tests** (7 new in `test_m8_command_lists.sh`): variable expansion, globs, pipes in body, nesting

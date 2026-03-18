@@ -4,9 +4,11 @@
 #include "command.h"
 #include "parser.h"
 #include "tokenizer.h"
+#include "util.h"
 
 typedef struct {
     const TokenList *tokens;
+    const char *input;    // Original source string (for extracting raw text)
     int pos;
 } Parser;
 
@@ -71,13 +73,15 @@ static int is_compound_keyword(Parser *p) {
     if (peek(p)->type != TOKEN_WORD) {
         return 0;
     }
-    return strcmp(peek(p)->value, "if") == 0;
+    return strcmp(peek(p)->value, "if") == 0 ||
+           strcmp(peek(p)->value, "for") == 0;
 }
 
 // Forward declarations for mutual recursion.
 static CommandList *parse_command_list_until(Parser *p, const char **stops,
                                             int num_stops);
 static IfCommand *parse_if_command(Parser *p);
+static ForCommand *parse_for_command(Parser *p);
 
 // Parse a simple command: mix of WORD tokens and redirections.
 // Grammar: command = (WORD | redirection)+
@@ -167,8 +171,10 @@ static Node parse_entry(Parser *p) {
         if (strcmp(peek(p)->value, "if") == 0) {
             node.type = NODE_IF;
             node.if_cmd = parse_if_command(p);
+        } else if (strcmp(peek(p)->value, "for") == 0) {
+            node.type = NODE_FOR;
+            node.for_cmd = parse_for_command(p);
         } else {
-            // Unreachable for now — is_compound_keyword only matches "if"
             node.type = NODE_PIPELINE;
             node.pipeline = NULL;
         }
@@ -184,8 +190,24 @@ static int node_is_error(Node *n) {
     switch (n->type) {
         case NODE_PIPELINE: return n->pipeline == NULL;
         case NODE_IF:       return n->if_cmd == NULL;
+        case NODE_FOR:      return n->for_cmd == NULL;
     }
     return 1;
+}
+
+// Add a parsed node to the command list.
+static void command_list_add_node(CommandList *list, Node *node) {
+    switch (node->type) {
+        case NODE_PIPELINE:
+            command_list_add_pipeline(list, node->pipeline);
+            break;
+        case NODE_IF:
+            command_list_add_if(list, node->if_cmd);
+            break;
+        case NODE_FOR:
+            command_list_add_for(list, node->for_cmd);
+            break;
+    }
 }
 
 // Map a list operator token to its type.
@@ -226,11 +248,7 @@ static CommandList *parse_command_list_until(Parser *p, const char **stops,
     }
 
     CommandList *list = command_list_new();
-    if (node.type == NODE_PIPELINE) {
-        command_list_add_pipeline(list, node.pipeline);
-    } else {
-        command_list_add_if(list, node.if_cmd);
-    }
+    command_list_add_node(list, &node);
 
     // Parse remaining entries separated by ; && ||
     while (is_list_operator(peek(p)->type)) {
@@ -259,11 +277,7 @@ static CommandList *parse_command_list_until(Parser *p, const char **stops,
             command_list_free(list);
             return NULL;
         }
-        if (node.type == NODE_PIPELINE) {
-            command_list_add_pipeline(list, node.pipeline);
-        } else {
-            command_list_add_if(list, node.if_cmd);
-        }
+        command_list_add_node(list, &node);
         command_list_add_operator(list, op);
     }
 
@@ -273,6 +287,92 @@ static CommandList *parse_command_list_until(Parser *p, const char **stops,
     }
 
     return list;
+}
+
+// Parse a for/in/do/done loop.
+// Assumes the current token is the WORD "for".
+// Grammar: for VAR in WORD... ; do command_list done
+static ForCommand *parse_for_command(Parser *p) {
+    advance(p); // consume "for"
+
+    // Expect variable name
+    if (peek(p)->type != TOKEN_WORD) {
+        fprintf(stderr, "splash: syntax error: expected variable name after 'for'\n");
+        return NULL;
+    }
+    Token *var_tok = advance(p);
+    ForCommand *cmd = for_command_new(var_tok->value);
+
+    // Skip newlines
+    while (peek(p)->type == TOKEN_NEWLINE) {
+        advance(p);
+    }
+
+    // Expect "in"
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "in") != 0) {
+        fprintf(stderr, "splash: syntax error: expected 'in' after 'for %s'\n",
+                cmd->var_name);
+        for_command_free(cmd);
+        return NULL;
+    }
+    advance(p); // consume "in"
+
+    // Collect words until ; or newline or "do"
+    while (peek(p)->type == TOKEN_WORD &&
+           strcmp(peek(p)->value, "do") != 0) {
+        Token *word = advance(p);
+        for_command_add_word(cmd, word->value);
+    }
+
+    // Skip ; or newline before "do"
+    while (peek(p)->type == TOKEN_SEMICOLON ||
+           peek(p)->type == TOKEN_NEWLINE) {
+        advance(p);
+    }
+
+    // Expect "do"
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "do") != 0) {
+        fprintf(stderr, "splash: syntax error: expected 'do'\n");
+        for_command_free(cmd);
+        return NULL;
+    }
+    advance(p); // consume "do"
+
+    // Extract raw body text from the original input string.
+    // The body starts after "do" and ends before "done".
+    // We need to skip the body tokens to find "done", while recording
+    // the source range.
+    int body_start_pos = peek(p)->pos;
+
+    // Parse body (to advance past it and validate structure)
+    const char *done_stops[] = {"done"};
+    CommandList *body_ast = parse_command_list_until(p, done_stops, 1);
+    if (!body_ast) {
+        for_command_free(cmd);
+        return NULL;
+    }
+
+    // Extract raw source text for the body
+    int body_end_pos = peek(p)->pos; // position of "done" token
+    if (p->input && body_end_pos > body_start_pos) {
+        int len = body_end_pos - body_start_pos;
+        cmd->body_src = xmalloc((size_t)len + 1);
+        memcpy(cmd->body_src, p->input + body_start_pos, (size_t)len);
+        cmd->body_src[len] = '\0';
+    } else {
+        cmd->body_src = xstrdup("");
+    }
+    command_list_free(body_ast);
+
+    // Expect "done"
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "done") != 0) {
+        fprintf(stderr, "splash: syntax error: expected 'done'\n");
+        for_command_free(cmd);
+        return NULL;
+    }
+    advance(p); // consume "done"
+
+    return cmd;
 }
 
 // Parse an if/elif/else/fi compound command.
@@ -358,12 +458,12 @@ static IfCommand *parse_if_command(Parser *p) {
     return cmd;
 }
 
-CommandList *parser_parse(const TokenList *tokens) {
+CommandList *parser_parse(const TokenList *tokens, const char *input) {
     if (!tokens || tokens->count == 0) {
         return NULL;
     }
 
-    Parser p = { .tokens = tokens, .pos = 0 };
+    Parser p = { .tokens = tokens, .input = input, .pos = 0 };
 
     // Skip leading newlines
     while (peek(&p)->type == TOKEN_NEWLINE) {

@@ -115,6 +115,9 @@ void node_free(Node *node) {
         case NODE_IF:
             if_command_free(node->if_cmd);
             break;
+        case NODE_FOR:
+            for_command_free(node->for_cmd);
+            break;
     }
 }
 
@@ -145,6 +148,13 @@ void command_list_add_pipeline(CommandList *list, Pipeline *pl) {
     list->num_entries++;
 }
 
+void command_list_add_for(CommandList *list, ForCommand *for_cmd) {
+    command_list_grow(list);
+    list->entries[list->num_entries].type = NODE_FOR;
+    list->entries[list->num_entries].for_cmd = for_cmd;
+    list->num_entries++;
+}
+
 void command_list_add_if(CommandList *list, IfCommand *if_cmd) {
     command_list_grow(list);
     list->entries[list->num_entries].type = NODE_IF;
@@ -170,6 +180,38 @@ void command_list_free(CommandList *list) {
     free(list->entries);
     free(list->operators);
     free(list);
+}
+
+ForCommand *for_command_new(const char *var_name) {
+    ForCommand *cmd = xmalloc(sizeof(ForCommand));
+    cmd->var_name = xstrdup(var_name);
+    cmd->word_capacity = INITIAL_CAPACITY;
+    cmd->words = xmalloc(sizeof(char *) * (size_t)cmd->word_capacity);
+    cmd->num_words = 0;
+    cmd->body_src = NULL;
+    return cmd;
+}
+
+void for_command_add_word(ForCommand *cmd, const char *word) {
+    if (cmd->num_words >= cmd->word_capacity) {
+        cmd->word_capacity *= 2;
+        cmd->words = xrealloc(cmd->words,
+                              sizeof(char *) * (size_t)cmd->word_capacity);
+    }
+    cmd->words[cmd->num_words++] = xstrdup(word);
+}
+
+void for_command_free(ForCommand *cmd) {
+    if (!cmd) {
+        return;
+    }
+    free(cmd->var_name);
+    for (int i = 0; i < cmd->num_words; i++) {
+        free(cmd->words[i]);
+    }
+    free(cmd->words);
+    free(cmd->body_src);
+    free(cmd);
 }
 
 IfCommand *if_command_new(void) {
