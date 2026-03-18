@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-17
 **Current milestone**: Milestone 7 — Structured Data Pipes (Novel Feature)
-**Last completed feature**: 7.14 count
+**Last completed feature**: 7.15 from-csv/json/lines
 
 ---
 
@@ -235,7 +235,7 @@ splash/
 | 7.12 | `select` filter | `select <col1> <col2> ...` — keep only named columns. | `DONE` | 2026-03-17 | Multi-column support, unknown columns warned and skipped |
 | 7.13 | `first` / `last` | `first <N>` / `last <N>` — take first or last N rows. | `DONE` | 2026-03-17 | Default N=10, clamps to table size |
 | 7.14 | `count` | Return single value: number of rows. | `DONE` | 2026-03-17 | Returns VALUE_INT, skips non-table values |
-| 7.15 | `from-csv/json/lines` | Parse text stdin into a table. | `TODO` | | |
+| 7.15 | `from-csv/json/lines` | Parse text stdin into a table. | `DONE` | 2026-03-17 | Hand-rolled CSV (RFC 4180) and JSON parsers, type inference, executor handles text pipe → from-* → |> chain |
 | 7.16 | `to-csv/json` | Serialize table to text format. | `TODO` | | |
 
 **Verification**: `ls |> where size > 1000 |> sort name` → filtered sorted table. `ls |> select name size` → two columns. `ls | grep foo` → normal text pipe. `cat data.csv | from-csv |> sort age |> to-json` → format conversion.

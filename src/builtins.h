@@ -15,11 +15,20 @@ int builtin_execute(SimpleCommand *cmd);
 // Returns 1 if the command produces structured output, 0 otherwise.
 int builtin_is_structured(const char *name);
 
+// Check if a command is a from-* text-to-structured source (from-csv, etc.).
+// These read text from an input fd and produce structured tables.
+int builtin_is_from_source(const char *name);
+
 // Create a PipelineStage for a structured builtin command.
 // Returns NULL if the command is not a structured builtin.
 // upstream may be NULL for source stages; ownership is transferred.
 // Caller takes ownership of the returned stage.
 PipelineStage *builtin_create_stage(SimpleCommand *cmd,
                                     PipelineStage *upstream);
+
+// Create a PipelineStage for a from-* source that reads text from input_fd.
+// Takes ownership of input_fd (closes it after reading).
+// Caller takes ownership of the returned stage.
+PipelineStage *builtin_create_from_stage(SimpleCommand *cmd, int input_fd);
 
 #endif // SPLASH_BUILTINS_H

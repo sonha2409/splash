@@ -453,3 +453,74 @@ executor_execute()
 - Empty source produces no output
 - NULL stage with valid fd: fd gets closed, no crash
 - Bad fd (-1): stage gets freed, no crash
+
+---
+
+## `where` Filter (7.10)
+
+*Documentation pending.*
+
+---
+
+## `sort`, `select`, `first`/`last`, `count` Filters (7.11–7.14)
+
+*Documentation pending.*
+
+---
+
+## `from-csv`, `from-json`, `from-lines` Sources (7.15)
+
+### Design
+
+Three new structured builtins that convert text input into structured tables. Unlike `ls`/`ps`/`env`/`find` which generate data from system APIs, the `from-*` family reads text from stdin and parses it into a `Table`.
+
+### `from-csv`
+
+Reads CSV text from stdin. The first line is treated as column headers.
+
+- **RFC 4180 compliance**: Supports quoted fields — embedded commas, escaped quotes (`""`), and embedded newlines within quoted values are all handled correctly.
+- **Type inference**: Each cell is tested in order: int → float → bool → string. The first parse that succeeds determines the cell's `Value` type.
+- **Column type hints**: After all rows are parsed, each column's type hint is updated to the dominant type observed across all cells in that column. This ensures `table_print()` applies correct alignment (e.g., right-align numeric columns).
+
+### `from-json`
+
+Reads a JSON array of objects from stdin.
+
+- **Keys → columns**: Object keys become column names. Column order follows the first object's key order; additional keys from later objects are appended.
+- **Value mapping**: JSON strings → `VALUE_STRING`, numbers → `VALUE_INT` or `VALUE_FLOAT`, booleans → `VALUE_BOOL`, null → `VALUE_NIL`.
+- **Nested structures**: Nested objects and arrays are stringified (serialized back to JSON text) and stored as `VALUE_STRING`.
+- **Missing keys**: If an object lacks a key present in other objects, the cell is set to `VALUE_NIL`.
+- **Column types**: Inferred from actual values, same dominant-type logic as `from-csv`.
+
+### `from-lines`
+
+Reads text from stdin, splits by newline, produces a single-column table.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `line` | STRING | One line of input text |
+
+Empty lines are preserved as empty string values. Trailing newline does not produce an extra empty row.
+
+### Executor integration
+
+The `from-*` builtins work in three contexts:
+
+1. **Standalone with redirect**: `from-csv < file.csv` — the executor opens the redirect, the structured builtin reads from stdin, drains to stdout.
+2. **With structured chain**: `from-csv < file.csv |> sort age` — redirect feeds the source, `|>` connects filters. The executor builds the full structured pipeline and drains it.
+3. **Text pipe input**: `cat file.csv | from-csv |> sort age` — a text `|` feeds into the `from-*` source (which reads from stdin), then `|>` connects downstream filters. The executor detects the structured segment starting at `from-csv` and builds the pipeline from there.
+
+In all three cases, the `from-*` builtin's `next()` function reads from stdin (fd 0), which has been set up by the executor via redirects or `dup2()` from an upstream text pipe.
+
+### Known limitation
+
+Embedded newlines in CSV quoted fields are correctly parsed into the `Value` string, but `table_print()` does not escape newlines in cell content. This causes the table display to break across lines. The data is correct internally — only the display is affected.
+
+### Edge cases
+
+- Empty input (no data on stdin): produces an empty table (columns from header only for CSV, no columns for JSON/lines)
+- CSV with only a header line: produces a table with columns but zero rows
+- JSON with empty array `[]`: produces a table with zero columns and zero rows
+- JSON with non-array input: error message to stderr
+- Malformed JSON: error message to stderr, returns empty table
+- `from-lines` with single line (no trailing newline): produces a 1-row table

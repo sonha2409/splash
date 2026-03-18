@@ -407,6 +407,8 @@ char *editor_readline(const char *prompt) {
         switch (c) {
         case '\r':  // Enter
         case '\n':
+            // Clear suggestion ghost text before leaving the line
+            refresh_line(prompt, buf, len, len, NULL);
             leave_raw_mode();
             term_write("\r\n", 2);
             buf[len] = '\0';

@@ -1,6 +1,8 @@
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <libproc.h>
+#include <math.h>
 #include <regex.h>
 #include <signal.h>
 #include <stdio.h>
@@ -1408,6 +1410,749 @@ static PipelineStage *create_count_stage(PipelineStage *upstream) {
 }
 
 
+// --- Helper: read all data from a FILE* into a dynamically allocated buffer ---
+
+static char *read_all_from_file(FILE *f, size_t *out_len) {
+    size_t cap = 4096;
+    size_t len = 0;
+    char *buf = xmalloc(cap);
+
+    for (;;) {
+        size_t n = fread(buf + len, 1, cap - len, f);
+        len += n;
+        if (n == 0) break;
+        if (len == cap) {
+            cap *= 2;
+            buf = xrealloc(buf, cap);
+        }
+    }
+    buf[len] = '\0';
+    if (out_len) *out_len = len;
+    return buf;
+}
+
+
+// --- Structured from-lines source ---
+// Reads text from input_fd, splits by newline, produces a single-column table.
+
+typedef struct {
+    Value *table_val;
+    int yielded;
+} FromLinesState;
+
+static Value *from_lines_stage_next(PipelineStage *self) {
+    FromLinesState *s = self->state;
+    if (s->yielded || !s->table_val) return NULL;
+    s->yielded = 1;
+    return value_clone(s->table_val);
+}
+
+static void from_lines_stage_free(PipelineStage *self) {
+    FromLinesState *s = self->state;
+    if (s->table_val) value_free(s->table_val);
+    free(s);
+}
+
+static PipelineStage *create_from_lines_stage(int input_fd) {
+    // Dup stdin so fclose won't close the original fd
+    int fd = (input_fd == STDIN_FILENO) ? dup(input_fd) : input_fd;
+    if (fd < 0) {
+        fprintf(stderr, "splash: from-lines: %s\n", strerror(errno));
+        return NULL;
+    }
+    FILE *f = fdopen(fd, "r");
+    if (!f) {
+        fprintf(stderr, "splash: from-lines: %s\n", strerror(errno));
+        close(fd);
+        return NULL;
+    }
+
+    size_t len = 0;
+    char *buf = read_all_from_file(f, &len);
+    fclose(f);
+
+    const char *col_names[] = {"line"};
+    ValueType col_types[] = {VALUE_STRING};
+    Table *t = table_new(col_names, col_types, 1);
+
+    // Split by newline
+    char *p = buf;
+    while (*p) {
+        char *nl = strchr(p, '\n');
+        size_t line_len = nl ? (size_t)(nl - p) : strlen(p);
+        if (line_len == 0 && !nl) break; // trailing empty after last newline
+
+        char *line = xmalloc(line_len + 1);
+        memcpy(line, p, line_len);
+        line[line_len] = '\0';
+
+        Value *row[] = {value_string(line)};
+        table_add_row(t, row, 1);
+        free(line);
+
+        p = nl ? nl + 1 : p + line_len;
+    }
+
+    free(buf);
+
+    FromLinesState *s = xmalloc(sizeof(FromLinesState));
+    s->table_val = value_table(t);
+    s->yielded = 0;
+    return pipeline_stage_new(from_lines_stage_next, from_lines_stage_free,
+                              s, NULL);
+}
+
+
+// --- Structured from-csv source ---
+// Reads CSV text from input_fd. First line = headers, subsequent lines = data.
+// Supports RFC 4180 quoted fields. Type inference: int → float → string.
+
+// Parse a single CSV field starting at *pos. Advances *pos past the field
+// (and the delimiter/newline). Returns an owned string.
+static char *csv_parse_field(const char *buf, size_t len, size_t *pos) {
+    size_t cap = 64;
+    size_t flen = 0;
+    char *field = xmalloc(cap);
+
+    if (*pos < len && buf[*pos] == '"') {
+        // Quoted field
+        (*pos)++; // skip opening quote
+        while (*pos < len) {
+            if (buf[*pos] == '"') {
+                if (*pos + 1 < len && buf[*pos + 1] == '"') {
+                    // Escaped quote
+                    if (flen + 1 >= cap) { cap *= 2; field = xrealloc(field, cap); }
+                    field[flen++] = '"';
+                    *pos += 2;
+                } else {
+                    // End of quoted field
+                    (*pos)++; // skip closing quote
+                    break;
+                }
+            } else {
+                if (flen + 1 >= cap) { cap *= 2; field = xrealloc(field, cap); }
+                field[flen++] = buf[*pos];
+                (*pos)++;
+            }
+        }
+        // Skip trailing comma or newline
+        if (*pos < len && buf[*pos] == ',') (*pos)++;
+    } else {
+        // Unquoted field — read until comma or newline or end
+        while (*pos < len && buf[*pos] != ',' && buf[*pos] != '\n' && buf[*pos] != '\r') {
+            if (flen + 1 >= cap) { cap *= 2; field = xrealloc(field, cap); }
+            field[flen++] = buf[*pos];
+            (*pos)++;
+        }
+        if (*pos < len && buf[*pos] == ',') (*pos)++;
+    }
+
+    field[flen] = '\0';
+    return field;
+}
+
+// Parse one CSV line into an array of fields. Returns field count.
+// Advances *pos past the line (including newline).
+static size_t csv_parse_line(const char *buf, size_t len, size_t *pos,
+                              char ***out_fields) {
+    size_t cap = 8;
+    size_t count = 0;
+    char **fields = xmalloc(sizeof(char *) * cap);
+
+    while (*pos < len && buf[*pos] != '\n' && buf[*pos] != '\r') {
+        if (count >= cap) { cap *= 2; fields = xrealloc(fields, sizeof(char *) * cap); }
+        fields[count++] = csv_parse_field(buf, len, pos);
+    }
+    // Handle empty line case: if we haven't parsed any fields, still return 0
+    // Skip newline
+    if (*pos < len && buf[*pos] == '\r') (*pos)++;
+    if (*pos < len && buf[*pos] == '\n') (*pos)++;
+
+    *out_fields = fields;
+    return count;
+}
+
+// Try to infer the best Value type for a string.
+static Value *csv_infer_value(const char *s) {
+    if (!s || !*s) return value_string("");
+
+    // Try integer
+    char *end;
+    errno = 0;
+    long long iv = strtoll(s, &end, 10);
+    if (*end == '\0' && errno == 0 && end != s) {
+        return value_int((int64_t)iv);
+    }
+
+    // Try float
+    errno = 0;
+    double fv = strtod(s, &end);
+    if (*end == '\0' && errno == 0 && end != s && isfinite(fv)) {
+        return value_float(fv);
+    }
+
+    // Boolean
+    if (strcmp(s, "true") == 0) return value_bool(true);
+    if (strcmp(s, "false") == 0) return value_bool(false);
+
+    return value_string(s);
+}
+
+typedef struct {
+    Value *table_val;
+    int yielded;
+} FromCsvState;
+
+static Value *from_csv_stage_next(PipelineStage *self) {
+    FromCsvState *s = self->state;
+    if (s->yielded || !s->table_val) return NULL;
+    s->yielded = 1;
+    return value_clone(s->table_val);
+}
+
+static void from_csv_stage_free(PipelineStage *self) {
+    FromCsvState *s = self->state;
+    if (s->table_val) value_free(s->table_val);
+    free(s);
+}
+
+static PipelineStage *create_from_csv_stage(int input_fd) {
+    int fd = (input_fd == STDIN_FILENO) ? dup(input_fd) : input_fd;
+    if (fd < 0) {
+        fprintf(stderr, "splash: from-csv: %s\n", strerror(errno));
+        return NULL;
+    }
+    FILE *f = fdopen(fd, "r");
+    if (!f) {
+        fprintf(stderr, "splash: from-csv: %s\n", strerror(errno));
+        close(fd);
+        return NULL;
+    }
+
+    size_t len = 0;
+    char *buf = read_all_from_file(f, &len);
+    fclose(f);
+
+    if (len == 0) {
+        free(buf);
+        FromCsvState *s = xmalloc(sizeof(FromCsvState));
+        s->table_val = NULL;
+        s->yielded = 0;
+        return pipeline_stage_new(from_csv_stage_next, from_csv_stage_free,
+                                  s, NULL);
+    }
+
+    // Parse header line
+    size_t pos = 0;
+    char **headers = NULL;
+    size_t ncols = csv_parse_line(buf, len, &pos, &headers);
+
+    if (ncols == 0) {
+        free(headers);
+        free(buf);
+        FromCsvState *s = xmalloc(sizeof(FromCsvState));
+        s->table_val = NULL;
+        s->yielded = 0;
+        return pipeline_stage_new(from_csv_stage_next, from_csv_stage_free,
+                                  s, NULL);
+    }
+
+    // Create table with STRING types initially (we'll infer later)
+    ValueType *types = xmalloc(sizeof(ValueType) * ncols);
+    for (size_t i = 0; i < ncols; i++) types[i] = VALUE_STRING;
+
+    Table *t = table_new((const char **)headers, types, ncols);
+    free(types);
+
+    // Parse data rows
+    while (pos < len) {
+        // Skip blank lines
+        if (buf[pos] == '\n' || buf[pos] == '\r') {
+            if (buf[pos] == '\r') pos++;
+            if (pos < len && buf[pos] == '\n') pos++;
+            continue;
+        }
+
+        char **fields = NULL;
+        size_t nfields = csv_parse_line(buf, len, &pos, &fields);
+
+        Value **row = xmalloc(sizeof(Value *) * ncols);
+        for (size_t i = 0; i < ncols; i++) {
+            if (i < nfields) {
+                row[i] = csv_infer_value(fields[i]);
+            } else {
+                row[i] = value_string("");
+            }
+        }
+        table_add_row(t, row, ncols);
+
+        for (size_t i = 0; i < nfields; i++) free(fields[i]);
+        free(fields);
+        free(row);
+    }
+
+    for (size_t i = 0; i < ncols; i++) free(headers[i]);
+    free(headers);
+    free(buf);
+
+    // Update column types based on dominant type in each column
+    for (size_t c = 0; c < t->col_count; c++) {
+        int all_int = 1, all_float = 1;
+        for (size_t r = 0; r < t->row_count; r++) {
+            Value *v = table_get(t, r, c);
+            if (!v) continue;
+            if (v->type != VALUE_INT) all_int = 0;
+            if (v->type != VALUE_FLOAT && v->type != VALUE_INT) all_float = 0;
+        }
+        if (all_int && t->row_count > 0) {
+            t->columns[c].type = VALUE_INT;
+        } else if (all_float && t->row_count > 0) {
+            t->columns[c].type = VALUE_FLOAT;
+        }
+    }
+
+    FromCsvState *s = xmalloc(sizeof(FromCsvState));
+    s->table_val = value_table(t);
+    s->yielded = 0;
+    return pipeline_stage_new(from_csv_stage_next, from_csv_stage_free,
+                              s, NULL);
+}
+
+
+// --- Structured from-json source ---
+// Parses JSON array of objects into a table.
+// Minimal hand-rolled JSON parser — supports: objects, arrays, strings,
+// numbers, bools, null. Nested values are stringified.
+
+// JSON parser state
+typedef struct {
+    const char *buf;
+    size_t len;
+    size_t pos;
+} JsonParser;
+
+static void json_skip_whitespace(JsonParser *p) {
+    while (p->pos < p->len && isspace((unsigned char)p->buf[p->pos])) {
+        p->pos++;
+    }
+}
+
+static int json_peek(JsonParser *p) {
+    json_skip_whitespace(p);
+    return p->pos < p->len ? p->buf[p->pos] : -1;
+}
+
+static int json_consume(JsonParser *p, char c) {
+    json_skip_whitespace(p);
+    if (p->pos < p->len && p->buf[p->pos] == c) {
+        p->pos++;
+        return 1;
+    }
+    return 0;
+}
+
+// Parse a JSON string (opening " already peeked). Returns owned string, or NULL.
+static char *json_parse_string(JsonParser *p) {
+    if (!json_consume(p, '"')) return NULL;
+
+    size_t cap = 64;
+    size_t len = 0;
+    char *s = xmalloc(cap);
+
+    while (p->pos < p->len && p->buf[p->pos] != '"') {
+        if (p->buf[p->pos] == '\\' && p->pos + 1 < p->len) {
+            p->pos++;
+            char esc = p->buf[p->pos++];
+            char c;
+            switch (esc) {
+                case '"': c = '"'; break;
+                case '\\': c = '\\'; break;
+                case '/': c = '/'; break;
+                case 'b': c = '\b'; break;
+                case 'f': c = '\f'; break;
+                case 'n': c = '\n'; break;
+                case 'r': c = '\r'; break;
+                case 't': c = '\t'; break;
+                case 'u': {
+                    // Simple: skip 4 hex digits, replace with '?'
+                    for (int i = 0; i < 4 && p->pos < p->len; i++) p->pos++;
+                    c = '?';
+                    break;
+                }
+                default: c = esc; break;
+            }
+            if (len + 1 >= cap) { cap *= 2; s = xrealloc(s, cap); }
+            s[len++] = c;
+        } else {
+            if (len + 1 >= cap) { cap *= 2; s = xrealloc(s, cap); }
+            s[len++] = p->buf[p->pos++];
+        }
+    }
+    json_consume(p, '"'); // closing quote
+    s[len] = '\0';
+    return s;
+}
+
+// Parse a JSON value. Returns an owned Value*, or NULL on parse error.
+static Value *json_parse_value(JsonParser *p) {
+    int c = json_peek(p);
+    if (c < 0) return NULL;
+
+    if (c == '"') {
+        char *s = json_parse_string(p);
+        if (!s) return NULL;
+        Value *v = value_string(s);
+        free(s);
+        return v;
+    }
+
+    if (c == 't') {
+        if (p->pos + 4 <= p->len && strncmp(p->buf + p->pos, "true", 4) == 0) {
+            p->pos += 4;
+            return value_bool(true);
+        }
+        return NULL;
+    }
+
+    if (c == 'f') {
+        if (p->pos + 5 <= p->len && strncmp(p->buf + p->pos, "false", 5) == 0) {
+            p->pos += 5;
+            return value_bool(false);
+        }
+        return NULL;
+    }
+
+    if (c == 'n') {
+        if (p->pos + 4 <= p->len && strncmp(p->buf + p->pos, "null", 4) == 0) {
+            p->pos += 4;
+            return value_nil();
+        }
+        return NULL;
+    }
+
+    if (c == '[') {
+        // Parse array — stringify it
+        // We need to save position and re-parse to stringify
+        size_t start = p->pos;
+        p->pos++; // skip [
+        int depth = 1;
+        int in_string = 0;
+        while (p->pos < p->len && depth > 0) {
+            char ch = p->buf[p->pos];
+            if (in_string) {
+                if (ch == '\\') { p->pos++; } // skip escaped char
+                else if (ch == '"') { in_string = 0; }
+            } else {
+                if (ch == '"') { in_string = 1; }
+                else if (ch == '[') { depth++; }
+                else if (ch == ']') { depth--; }
+            }
+            p->pos++;
+        }
+        size_t slen = p->pos - start;
+        char *s = xmalloc(slen + 1);
+        memcpy(s, p->buf + start, slen);
+        s[slen] = '\0';
+        Value *v = value_string(s);
+        free(s);
+        return v;
+    }
+
+    if (c == '{') {
+        // Nested object — stringify it
+        size_t start = p->pos;
+        p->pos++; // skip {
+        int depth = 1;
+        int in_string = 0;
+        while (p->pos < p->len && depth > 0) {
+            char ch = p->buf[p->pos];
+            if (in_string) {
+                if (ch == '\\') { p->pos++; }
+                else if (ch == '"') { in_string = 0; }
+            } else {
+                if (ch == '"') { in_string = 1; }
+                else if (ch == '{') { depth++; }
+                else if (ch == '}') { depth--; }
+            }
+            p->pos++;
+        }
+        size_t slen = p->pos - start;
+        char *s = xmalloc(slen + 1);
+        memcpy(s, p->buf + start, slen);
+        s[slen] = '\0';
+        Value *v = value_string(s);
+        free(s);
+        return v;
+    }
+
+    // Number
+    if (c == '-' || (c >= '0' && c <= '9')) {
+        char *end;
+        const char *start = p->buf + p->pos;
+
+        // Try integer first
+        errno = 0;
+        long long iv = strtoll(start, &end, 10);
+        if (end > start && (*end == ',' || *end == '}' || *end == ']' ||
+            isspace((unsigned char)*end) || *end == '\0')) {
+            if (errno == 0) {
+                p->pos = (size_t)(end - p->buf);
+                return value_int((int64_t)iv);
+            }
+        }
+
+        // Try float
+        errno = 0;
+        double fv = strtod(start, &end);
+        if (end > start && errno == 0) {
+            p->pos = (size_t)(end - p->buf);
+            return value_float(fv);
+        }
+        return NULL;
+    }
+
+    return NULL;
+}
+
+// Parse a JSON object into parallel arrays of keys and values.
+// Returns number of key-value pairs, or -1 on error.
+typedef struct {
+    char **keys;
+    Value **values;
+    size_t count;
+} JsonObject;
+
+static int json_parse_object(JsonParser *p, JsonObject *obj) {
+    if (!json_consume(p, '{')) return -1;
+
+    size_t cap = 8;
+    obj->keys = xmalloc(sizeof(char *) * cap);
+    obj->values = xmalloc(sizeof(Value *) * cap);
+    obj->count = 0;
+
+    if (json_peek(p) == '}') {
+        p->pos++;
+        return 0;
+    }
+
+    for (;;) {
+        char *key = json_parse_string(p);
+        if (!key) goto fail;
+
+        if (!json_consume(p, ':')) {
+            free(key);
+            goto fail;
+        }
+
+        Value *val = json_parse_value(p);
+        if (!val) {
+            free(key);
+            goto fail;
+        }
+
+        if (obj->count >= cap) {
+            cap *= 2;
+            obj->keys = xrealloc(obj->keys, sizeof(char *) * cap);
+            obj->values = xrealloc(obj->values, sizeof(Value *) * cap);
+        }
+        obj->keys[obj->count] = key;
+        obj->values[obj->count] = val;
+        obj->count++;
+
+        if (json_peek(p) == ',') {
+            p->pos++;
+        } else {
+            break;
+        }
+    }
+
+    if (!json_consume(p, '}')) goto fail;
+    return 0;
+
+fail:
+    for (size_t i = 0; i < obj->count; i++) {
+        free(obj->keys[i]);
+        value_free(obj->values[i]);
+    }
+    free(obj->keys);
+    free(obj->values);
+    obj->count = 0;
+    return -1;
+}
+
+typedef struct {
+    Value *table_val;
+    int yielded;
+} FromJsonState;
+
+static Value *from_json_stage_next(PipelineStage *self) {
+    FromJsonState *s = self->state;
+    if (s->yielded || !s->table_val) return NULL;
+    s->yielded = 1;
+    return value_clone(s->table_val);
+}
+
+static void from_json_stage_free(PipelineStage *self) {
+    FromJsonState *s = self->state;
+    if (s->table_val) value_free(s->table_val);
+    free(s);
+}
+
+static PipelineStage *create_from_json_stage(int input_fd) {
+    int fd = (input_fd == STDIN_FILENO) ? dup(input_fd) : input_fd;
+    if (fd < 0) {
+        fprintf(stderr, "splash: from-json: %s\n", strerror(errno));
+        return NULL;
+    }
+    FILE *f = fdopen(fd, "r");
+    if (!f) {
+        fprintf(stderr, "splash: from-json: %s\n", strerror(errno));
+        close(fd);
+        return NULL;
+    }
+
+    size_t len = 0;
+    char *buf = read_all_from_file(f, &len);
+    fclose(f);
+
+    JsonParser parser = {buf, len, 0};
+
+    // Expect a JSON array of objects
+    if (!json_consume(&parser, '[')) {
+        fprintf(stderr, "splash: from-json: expected JSON array\n");
+        free(buf);
+        FromJsonState *s = xmalloc(sizeof(FromJsonState));
+        s->table_val = NULL;
+        s->yielded = 0;
+        return pipeline_stage_new(from_json_stage_next, from_json_stage_free,
+                                  s, NULL);
+    }
+
+    // Parse all objects to collect column names and values
+    size_t obj_cap = 16;
+    size_t obj_count = 0;
+    JsonObject *objects = xmalloc(sizeof(JsonObject) * obj_cap);
+
+    // Collect all unique column names in order
+    size_t col_cap = 16;
+    size_t col_count = 0;
+    char **col_names = xmalloc(sizeof(char *) * col_cap);
+
+    if (json_peek(&parser) != ']') {
+        for (;;) {
+            if (obj_count >= obj_cap) {
+                obj_cap *= 2;
+                objects = xrealloc(objects, sizeof(JsonObject) * obj_cap);
+            }
+            if (json_parse_object(&parser, &objects[obj_count]) < 0) {
+                fprintf(stderr, "splash: from-json: failed to parse object at position %zu\n",
+                        parser.pos);
+                break;
+            }
+
+            // Collect new column names
+            for (size_t k = 0; k < objects[obj_count].count; k++) {
+                int found = 0;
+                for (size_t c = 0; c < col_count; c++) {
+                    if (strcmp(col_names[c], objects[obj_count].keys[k]) == 0) {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    if (col_count >= col_cap) {
+                        col_cap *= 2;
+                        col_names = xrealloc(col_names, sizeof(char *) * col_cap);
+                    }
+                    col_names[col_count++] = xstrdup(objects[obj_count].keys[k]);
+                }
+            }
+            obj_count++;
+
+            if (json_peek(&parser) == ',') {
+                parser.pos++;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Build table
+    Table *t = NULL;
+    if (col_count > 0) {
+        ValueType *types = xmalloc(sizeof(ValueType) * col_count);
+        for (size_t i = 0; i < col_count; i++) types[i] = VALUE_STRING;
+        t = table_new((const char **)col_names, types, col_count);
+        free(types);
+
+        // Add rows
+        for (size_t r = 0; r < obj_count; r++) {
+            Value **row = xmalloc(sizeof(Value *) * col_count);
+            for (size_t c = 0; c < col_count; c++) {
+                row[c] = NULL;
+                for (size_t k = 0; k < objects[r].count; k++) {
+                    if (strcmp(objects[r].keys[k], col_names[c]) == 0) {
+                        row[c] = value_clone(objects[r].values[k]);
+                        break;
+                    }
+                }
+                if (!row[c]) row[c] = value_nil();
+            }
+            table_add_row(t, row, col_count);
+            free(row);
+        }
+
+        // Update column types based on actual values
+        for (size_t c = 0; c < t->col_count; c++) {
+            int all_int = 1, all_float = 1, all_bool = 1;
+            int has_data = 0;
+            for (size_t r = 0; r < t->row_count; r++) {
+                Value *v = table_get(t, r, c);
+                if (!v || v->type == VALUE_NIL) continue;
+                has_data = 1;
+                if (v->type != VALUE_INT) all_int = 0;
+                if (v->type != VALUE_FLOAT && v->type != VALUE_INT) all_float = 0;
+                if (v->type != VALUE_BOOL) all_bool = 0;
+            }
+            if (has_data) {
+                if (all_int) t->columns[c].type = VALUE_INT;
+                else if (all_float) t->columns[c].type = VALUE_FLOAT;
+                else if (all_bool) t->columns[c].type = VALUE_BOOL;
+            }
+        }
+    }
+
+    // Cleanup
+    for (size_t r = 0; r < obj_count; r++) {
+        for (size_t k = 0; k < objects[r].count; k++) {
+            free(objects[r].keys[k]);
+            value_free(objects[r].values[k]);
+        }
+        free(objects[r].keys);
+        free(objects[r].values);
+    }
+    free(objects);
+    for (size_t i = 0; i < col_count; i++) free(col_names[i]);
+    free(col_names);
+    free(buf);
+
+    FromJsonState *s = xmalloc(sizeof(FromJsonState));
+    s->table_val = t ? value_table(t) : NULL;
+    s->yielded = 0;
+    return pipeline_stage_new(from_json_stage_next, from_json_stage_free,
+                              s, NULL);
+}
+
+
+// --- Check if a command is a from-* text-to-structured source ---
+
+static int is_from_source(const char *name) {
+    return strcmp(name, "from-csv") == 0 ||
+           strcmp(name, "from-json") == 0 ||
+           strcmp(name, "from-lines") == 0;
+}
+
+
 int builtin_is_structured(const char *name) {
     return strcmp(name, "ls") == 0 ||
            strcmp(name, "ps") == 0 ||
@@ -1418,7 +2163,14 @@ int builtin_is_structured(const char *name) {
            strcmp(name, "select") == 0 ||
            strcmp(name, "first") == 0 ||
            strcmp(name, "last") == 0 ||
-           strcmp(name, "count") == 0;
+           strcmp(name, "count") == 0 ||
+           strcmp(name, "from-csv") == 0 ||
+           strcmp(name, "from-json") == 0 ||
+           strcmp(name, "from-lines") == 0;
+}
+
+int builtin_is_from_source(const char *name) {
+    return is_from_source(name);
 }
 
 PipelineStage *builtin_create_stage(SimpleCommand *cmd,
@@ -1443,6 +2195,12 @@ PipelineStage *builtin_create_stage(SimpleCommand *cmd,
         return create_env_stage();
     }
 
+    // from-* sources: read from stdin by default
+    if (is_from_source(name)) {
+        pipeline_stage_free(upstream);
+        return builtin_create_from_stage(cmd, STDIN_FILENO);
+    }
+
     // Filter builtins: chain onto upstream
     if (strcmp(name, "where") == 0) {
         return create_where_stage(cmd, upstream);
@@ -1464,5 +2222,20 @@ PipelineStage *builtin_create_stage(SimpleCommand *cmd,
     }
 
     pipeline_stage_free(upstream);
+    return NULL;
+}
+
+PipelineStage *builtin_create_from_stage(SimpleCommand *cmd, int input_fd) {
+    const char *name = cmd->argv[0];
+    if (strcmp(name, "from-csv") == 0) {
+        return create_from_csv_stage(input_fd);
+    }
+    if (strcmp(name, "from-json") == 0) {
+        return create_from_json_stage(input_fd);
+    }
+    if (strcmp(name, "from-lines") == 0) {
+        return create_from_lines_stage(input_fd);
+    }
+    close(input_fd);
     return NULL;
 }

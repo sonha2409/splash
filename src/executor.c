@@ -163,11 +163,95 @@ static int execute_structured_pipeline(Pipeline *pl, const char *command_str) {
     }
 
     // Build the structured pipeline stage chain starting from struct_start.
-    PipelineStage *stage = builtin_create_stage(
-        pl->commands[struct_start], NULL);
-    if (!stage) {
-        // Structured builtin failed to create stage — fall back
-        return execute_pipeline_impl(pl, command_str);
+    PipelineStage *stage = NULL;
+
+    if (struct_start > 0 && builtin_is_from_source(pl->commands[struct_start]->argv[0])) {
+        // from-* source preceded by text commands: run the text prefix as a
+        // sub-pipeline, pipe its output into the from-* source.
+        int text_pipe[2];
+        if (pipe(text_pipe) == -1) {
+            fprintf(stderr, "splash: pipe: %s\n", strerror(errno));
+            return -1;
+        }
+
+        pid_t text_pid = fork();
+        if (text_pid < 0) {
+            fprintf(stderr, "splash: fork: %s\n", strerror(errno));
+            close(text_pipe[0]);
+            close(text_pipe[1]);
+            return -1;
+        }
+
+        if (text_pid == 0) {
+            // Child: run text prefix with stdout → text_pipe[1]
+            close(text_pipe[0]);
+            if (dup2(text_pipe[1], STDOUT_FILENO) == -1) {
+                fprintf(stderr, "splash: dup2: %s\n", strerror(errno));
+                close(text_pipe[1]);
+                _exit(1);
+            }
+            close(text_pipe[1]);
+            signals_default();
+
+            // Build sub-pipeline from commands [0..struct_start-1]
+            Pipeline *pre = pipeline_new();
+            for (int i = 0; i < struct_start; i++) {
+                pipeline_add_command(pre, pl->commands[i]);
+                if (i < struct_start - 1) {
+                    pipeline_add_pipe_type(pre, pl->pipe_types[i]);
+                }
+            }
+            if (struct_start > 1) {
+                for (int i = 0; i < struct_start - 1; i++) {
+                    pre->pipe_types[i] = pl->pipe_types[i];
+                }
+            }
+
+            int status = execute_pipeline_impl(pre, command_str);
+
+            // Null out borrowed commands
+            for (int i = 0; i < struct_start; i++) {
+                pre->commands[i] = NULL;
+            }
+            pre->num_commands = 0;
+            pipeline_free(pre);
+            _exit(status < 0 ? 1 : status);
+        }
+
+        // Parent: close write end, create from-* stage reading from pipe
+        close(text_pipe[1]);
+        stage = builtin_create_from_stage(pl->commands[struct_start],
+                                          text_pipe[0]);
+        // Wait for text prefix child
+        waitpid(text_pid, NULL, 0);
+
+        if (!stage) {
+            return -1;
+        }
+    } else {
+        // For from-* sources at the start, apply redirections for stdin
+        int saved_stdin = -1;
+        SimpleCommand *src_cmd = pl->commands[struct_start];
+        if (builtin_is_from_source(src_cmd->argv[0]) &&
+            src_cmd->num_redirects > 0) {
+            saved_stdin = dup(STDIN_FILENO);
+            if (apply_redirections(src_cmd) == -1) {
+                if (saved_stdin >= 0) close(saved_stdin);
+                return -1;
+            }
+        }
+
+        stage = builtin_create_stage(src_cmd, NULL);
+
+        if (saved_stdin >= 0) {
+            dup2(saved_stdin, STDIN_FILENO);
+            close(saved_stdin);
+        }
+
+        if (!stage) {
+            // Structured builtin failed to create stage — fall back
+            return execute_pipeline_impl(pl, command_str);
+        }
     }
 
     // Chain structured filters connected by |>
@@ -389,6 +473,17 @@ static int execute_pipeline_impl(Pipeline *pl, const char *command_str) {
                 _exit(1);
             }
 
+            // Handle from-* sources in child process: read stdin, produce table
+            if (builtin_is_from_source(pl->commands[i]->argv[0])) {
+                PipelineStage *stage = builtin_create_from_stage(
+                    pl->commands[i], STDIN_FILENO);
+                if (stage) {
+                    pipeline_stage_drain(stage, stdout);
+                    fflush(stdout);
+                }
+                _exit(stage ? 0 : 1);
+            }
+
             execvp(pl->commands[i]->argv[0], pl->commands[i]->argv);
             fprintf(stderr, "splash: %s: %s\n",
                     pl->commands[i]->argv[0], strerror(errno));
@@ -481,10 +576,43 @@ int executor_execute(Pipeline *pl, const char *command_str) {
     // Single structured builtin: build stage and drain to stdout
     if (pl->num_commands == 1 && !pl->background &&
         builtin_is_structured(pl->commands[0]->argv[0])) {
-        PipelineStage *stage = builtin_create_stage(pl->commands[0], NULL);
+        SimpleCommand *cmd = pl->commands[0];
+
+        // For from-* sources, apply redirections so they can read from
+        // redirected stdin (e.g., from-csv < file.csv).
+        int saved_stdin = -1;
+        int saved_stdout = -1;
+        if (builtin_is_from_source(cmd->argv[0]) && cmd->num_redirects > 0) {
+            saved_stdin = dup(STDIN_FILENO);
+            saved_stdout = dup(STDOUT_FILENO);
+            if (apply_redirections(cmd) == -1) {
+                if (saved_stdin >= 0) close(saved_stdin);
+                if (saved_stdout >= 0) close(saved_stdout);
+                return 1;
+            }
+        }
+
+        PipelineStage *stage = builtin_create_stage(cmd, NULL);
         if (stage) {
             pipeline_stage_drain(stage, stdout);
+            // Restore stdin/stdout if we redirected
+            if (saved_stdin >= 0) {
+                dup2(saved_stdin, STDIN_FILENO);
+                close(saved_stdin);
+            }
+            if (saved_stdout >= 0) {
+                dup2(saved_stdout, STDOUT_FILENO);
+                close(saved_stdout);
+            }
             return 0;
+        }
+        if (saved_stdin >= 0) {
+            dup2(saved_stdin, STDIN_FILENO);
+            close(saved_stdin);
+        }
+        if (saved_stdout >= 0) {
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(saved_stdout);
         }
         // Fall through to normal execution on failure
     }
