@@ -524,3 +524,86 @@ Embedded newlines in CSV quoted fields are correctly parsed into the `Value` str
 - JSON with non-array input: error message to stderr
 - Malformed JSON: error message to stderr, returns empty table
 - `from-lines` with single line (no trailing newline): produces a 1-row table
+
+## Serializers: `to-csv` and `to-json` (7.16)
+
+### Design
+
+The `to-csv` and `to-json` filters are the inverse of `from-csv` and `from-json`. They consume a `VALUE_TABLE` from upstream and produce a `VALUE_STRING` containing the serialized text. This enables format conversion pipelines:
+
+```
+cat data.csv | from-csv |> sort age |> to-json        # CSV → filtered JSON
+ls |> where type == "file" |> select name size |> to-csv  # table → CSV
+```
+
+### Why filters, not sinks?
+
+These are pipeline **filters** (wrap upstream, produce a value), not terminal sinks. This means:
+
+- They chain naturally: `ls |> to-json` works because `to-json` pulls from `ls`'s stage.
+- Their output (`VALUE_STRING`) is printed by `pipeline_stage_drain()` like any other value.
+- They could theoretically feed into further stages (though that's unusual).
+
+### Implementation
+
+Both follow the same pattern:
+
+1. On first `next()` call, pull one `VALUE_TABLE` from upstream.
+2. Serialize the entire table into a heap-allocated string.
+3. Wrap it in a `VALUE_STRING` and return it.
+4. Return `NULL` on subsequent calls (single-shot).
+
+State structure:
+```c
+typedef struct {
+    Value *result;    // Serialized string, or NULL
+    int yielded;      // 0 = not yet yielded, 1 = done
+} ToCsvState / ToJsonState;
+```
+
+Non-table upstream values are passed through as-is.
+
+### `to-csv`
+
+Produces RFC 4180 compliant CSV:
+
+- **Header row**: Column names, comma-separated.
+- **Data rows**: Values converted to strings via `value_to_string()`.
+- **Quoting**: Fields containing commas, double quotes, or newlines are wrapped in double quotes. Internal double quotes are escaped as `""`.
+- **NIL values**: Empty field (nothing between commas).
+- **Numeric values**: Not quoted (e.g., `30` not `"30"`).
+
+### `to-json`
+
+Produces a JSON array of objects:
+
+```json
+[
+  {"col1": val1, "col2": val2},
+  {"col1": val3, "col2": val4}
+]
+```
+
+- **Column names** → JSON object keys (always double-quoted).
+- **Value types** → JSON types:
+  - `VALUE_STRING` → quoted string with escape sequences (`\"`, `\\`, `\n`, `\r`, `\t`, `\b`, `\f`, control chars as `\u00XX`)
+  - `VALUE_INT` → unquoted integer
+  - `VALUE_FLOAT` → unquoted number (via `%g` format)
+  - `VALUE_BOOL` → `true` / `false`
+  - `VALUE_NIL` → `null`
+  - `VALUE_TABLE`, `VALUE_LIST` → stringified and quoted
+- **Empty table**: Produces `[\n]` (empty array).
+- **Pretty-printed**: 2-space indentation per object, one object per line.
+
+### Terminal control fix
+
+When the executor runs a text prefix like `cat file | from-csv |> ...`, it forks an intermediate child to execute the text prefix. This child inherits the terminal on stdin, causing `execute_pipeline_impl` to detect interactive mode and call `tcsetpgrp()` — which sends SIGTTOU (since the parent shell still owns the terminal), stopping the child and hanging the pipeline.
+
+Fix: the intermediate child redirects stdin to `/dev/null` before calling `execute_pipeline_impl`, preventing interactive terminal control in the sub-process.
+
+### Edge cases
+
+- Empty table (0 rows): CSV produces header only; JSON produces `[]`
+- NIL values: CSV → empty field; JSON → `null`
+- Strings with special characters: properly escaped in both formats
+- Non-table upstream: passed through unchanged

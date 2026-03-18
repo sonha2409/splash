@@ -2144,6 +2144,305 @@ static PipelineStage *create_from_json_stage(int input_fd) {
 }
 
 
+// --- Structured to-csv serializer ---
+// Pulls a table from upstream and serializes it as RFC 4180 CSV text.
+
+typedef struct {
+    Value *result;
+    int yielded;
+} ToCsvState;
+
+// Check if a CSV field needs quoting (contains comma, quote, or newline).
+static int csv_needs_quoting(const char *s) {
+    for (const char *p = s; *p; p++) {
+        if (*p == ',' || *p == '"' || *p == '\n' || *p == '\r') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Append a CSV field to a dynamic buffer, quoting if necessary.
+// buf/len/cap are pointer-to so we can grow.
+static void csv_append_field(char **buf, size_t *len, size_t *cap,
+                             const char *field) {
+    int need_quote = csv_needs_quoting(field);
+    size_t flen = strlen(field);
+    // Worst case: 2 quotes + every char doubled + null
+    size_t needed = *len + flen * 2 + 3;
+    if (needed > *cap) {
+        while (needed > *cap) *cap *= 2;
+        *buf = xrealloc(*buf, *cap);
+    }
+
+    char *p = *buf + *len;
+    if (need_quote) {
+        *p++ = '"';
+        for (const char *s = field; *s; s++) {
+            if (*s == '"') {
+                *p++ = '"'; // escape quote as ""
+            }
+            *p++ = *s;
+        }
+        *p++ = '"';
+    } else {
+        memcpy(p, field, flen);
+        p += flen;
+    }
+    *len = (size_t)(p - *buf);
+}
+
+static Value *to_csv_stage_next(PipelineStage *self) {
+    ToCsvState *s = self->state;
+    if (s->yielded) return NULL;
+    s->yielded = 1;
+
+    if (s->result) {
+        return value_clone(s->result);
+    }
+    return NULL;
+}
+
+static void to_csv_stage_free(PipelineStage *self) {
+    ToCsvState *s = self->state;
+    if (s->result) value_free(s->result);
+    free(s);
+}
+
+static PipelineStage *create_to_csv_stage(PipelineStage *upstream) {
+    // Pull the table from upstream
+    Value *v = upstream->next(upstream);
+    if (!v || v->type != VALUE_TABLE) {
+        // Non-table: pass through as-is
+        ToCsvState *s = xmalloc(sizeof(ToCsvState));
+        s->result = v; // may be NULL
+        s->yielded = 0;
+        return pipeline_stage_new(to_csv_stage_next, to_csv_stage_free,
+                                  s, upstream);
+    }
+
+    Table *t = v->table;
+    size_t ncols = table_col_count(t);
+    size_t nrows = table_row_count(t);
+
+    size_t cap = 4096;
+    size_t len = 0;
+    char *buf = xmalloc(cap);
+
+    // Header row
+    for (size_t c = 0; c < ncols; c++) {
+        if (c > 0) {
+            if (len + 1 >= cap) { cap *= 2; buf = xrealloc(buf, cap); }
+            buf[len++] = ',';
+        }
+        csv_append_field(&buf, &len, &cap, t->columns[c].name);
+    }
+    if (len + 1 >= cap) { cap *= 2; buf = xrealloc(buf, cap); }
+    buf[len++] = '\n';
+
+    // Data rows
+    for (size_t r = 0; r < nrows; r++) {
+        for (size_t c = 0; c < ncols; c++) {
+            if (c > 0) {
+                if (len + 1 >= cap) { cap *= 2; buf = xrealloc(buf, cap); }
+                buf[len++] = ',';
+            }
+            Value *cell = table_get(t, r, c);
+            if (cell && cell->type != VALUE_NIL) {
+                char *str = value_to_string(cell);
+                csv_append_field(&buf, &len, &cap, str);
+                free(str);
+            }
+            // NIL → empty field (nothing appended)
+        }
+        if (len + 1 >= cap) { cap *= 2; buf = xrealloc(buf, cap); }
+        buf[len++] = '\n';
+    }
+
+    buf[len] = '\0';
+
+    // Trim the trailing newline so drain doesn't add a double newline
+    if (len > 0 && buf[len - 1] == '\n') {
+        buf[--len] = '\0';
+    }
+
+    ToCsvState *s = xmalloc(sizeof(ToCsvState));
+    s->result = value_string(buf);
+    s->yielded = 0;
+    free(buf);
+
+    value_free(v);
+    return pipeline_stage_new(to_csv_stage_next, to_csv_stage_free,
+                              s, upstream);
+}
+
+
+// --- Structured to-json serializer ---
+// Pulls a table from upstream and serializes it as a JSON array of objects.
+
+typedef struct {
+    Value *result;
+    int yielded;
+} ToJsonState;
+
+// Append a JSON-escaped string (with surrounding quotes) to a dynamic buffer.
+static void json_append_string(char **buf, size_t *len, size_t *cap,
+                               const char *str) {
+    // Worst case: every char becomes \uXXXX (6 chars) + 2 quotes
+    size_t slen = strlen(str);
+    size_t needed = *len + slen * 6 + 3;
+    if (needed > *cap) {
+        while (needed > *cap) *cap *= 2;
+        *buf = xrealloc(*buf, *cap);
+    }
+
+    char *p = *buf + *len;
+    *p++ = '"';
+    for (const char *s = str; *s; s++) {
+        switch (*s) {
+        case '"':  *p++ = '\\'; *p++ = '"';  break;
+        case '\\': *p++ = '\\'; *p++ = '\\'; break;
+        case '\n': *p++ = '\\'; *p++ = 'n';  break;
+        case '\r': *p++ = '\\'; *p++ = 'r';  break;
+        case '\t': *p++ = '\\'; *p++ = 't';  break;
+        case '\b': *p++ = '\\'; *p++ = 'b';  break;
+        case '\f': *p++ = '\\'; *p++ = 'f';  break;
+        default:
+            if ((unsigned char)*s < 0x20) {
+                // Control character → \u00XX
+                p += snprintf(p, 7, "\\u%04x", (unsigned char)*s);
+            } else {
+                *p++ = *s;
+            }
+            break;
+        }
+    }
+    *p++ = '"';
+    *len = (size_t)(p - *buf);
+}
+
+// Append a raw string (no escaping) to the dynamic buffer.
+static void json_append_raw(char **buf, size_t *len, size_t *cap,
+                            const char *str) {
+    size_t slen = strlen(str);
+    size_t needed = *len + slen + 1;
+    if (needed > *cap) {
+        while (needed > *cap) *cap *= 2;
+        *buf = xrealloc(*buf, *cap);
+    }
+    memcpy(*buf + *len, str, slen);
+    *len += slen;
+}
+
+// Append a single JSON value based on its type.
+static void json_append_value(char **buf, size_t *len, size_t *cap,
+                              const Value *val) {
+    if (!val || val->type == VALUE_NIL) {
+        json_append_raw(buf, len, cap, "null");
+        return;
+    }
+    switch (val->type) {
+    case VALUE_STRING:
+        json_append_string(buf, len, cap, val->string);
+        break;
+    case VALUE_INT: {
+        char num[32];
+        snprintf(num, sizeof(num), "%lld", (long long)val->integer);
+        json_append_raw(buf, len, cap, num);
+        break;
+    }
+    case VALUE_FLOAT: {
+        char num[64];
+        snprintf(num, sizeof(num), "%g", val->floating);
+        json_append_raw(buf, len, cap, num);
+        break;
+    }
+    case VALUE_BOOL:
+        json_append_raw(buf, len, cap, val->boolean ? "true" : "false");
+        break;
+    default: {
+        // TABLE, LIST, etc. → stringify
+        char *s = value_to_string(val);
+        json_append_string(buf, len, cap, s);
+        free(s);
+        break;
+    }
+    }
+}
+
+static Value *to_json_stage_next(PipelineStage *self) {
+    ToJsonState *s = self->state;
+    if (s->yielded) return NULL;
+    s->yielded = 1;
+
+    if (s->result) {
+        return value_clone(s->result);
+    }
+    return NULL;
+}
+
+static void to_json_stage_free(PipelineStage *self) {
+    ToJsonState *s = self->state;
+    if (s->result) value_free(s->result);
+    free(s);
+}
+
+static PipelineStage *create_to_json_stage(PipelineStage *upstream) {
+    // Pull the table from upstream
+    Value *v = upstream->next(upstream);
+    if (!v || v->type != VALUE_TABLE) {
+        ToJsonState *s = xmalloc(sizeof(ToJsonState));
+        s->result = v;
+        s->yielded = 0;
+        return pipeline_stage_new(to_json_stage_next, to_json_stage_free,
+                                  s, upstream);
+    }
+
+    Table *t = v->table;
+    size_t ncols = table_col_count(t);
+    size_t nrows = table_row_count(t);
+
+    size_t cap = 4096;
+    size_t len = 0;
+    char *buf = xmalloc(cap);
+
+    json_append_raw(&buf, &len, &cap, "[\n");
+
+    for (size_t r = 0; r < nrows; r++) {
+        json_append_raw(&buf, &len, &cap, "  {");
+        for (size_t c = 0; c < ncols; c++) {
+            if (c > 0) {
+                json_append_raw(&buf, &len, &cap, ", ");
+            }
+            json_append_string(&buf, &len, &cap, t->columns[c].name);
+            json_append_raw(&buf, &len, &cap, ": ");
+            Value *cell = table_get(t, r, c);
+            json_append_value(&buf, &len, &cap, cell);
+        }
+        if (r < nrows - 1) {
+            json_append_raw(&buf, &len, &cap, "},\n");
+        } else {
+            json_append_raw(&buf, &len, &cap, "}\n");
+        }
+    }
+
+    json_append_raw(&buf, &len, &cap, "]");
+
+    // Null-terminate
+    if (len >= cap) { cap = len + 1; buf = xrealloc(buf, cap); }
+    buf[len] = '\0';
+
+    ToJsonState *s = xmalloc(sizeof(ToJsonState));
+    s->result = value_string(buf);
+    s->yielded = 0;
+    free(buf);
+
+    value_free(v);
+    return pipeline_stage_new(to_json_stage_next, to_json_stage_free,
+                              s, upstream);
+}
+
+
 // --- Check if a command is a from-* text-to-structured source ---
 
 static int is_from_source(const char *name) {
@@ -2166,7 +2465,9 @@ int builtin_is_structured(const char *name) {
            strcmp(name, "count") == 0 ||
            strcmp(name, "from-csv") == 0 ||
            strcmp(name, "from-json") == 0 ||
-           strcmp(name, "from-lines") == 0;
+           strcmp(name, "from-lines") == 0 ||
+           strcmp(name, "to-csv") == 0 ||
+           strcmp(name, "to-json") == 0;
 }
 
 int builtin_is_from_source(const char *name) {
@@ -2219,6 +2520,12 @@ PipelineStage *builtin_create_stage(SimpleCommand *cmd,
     }
     if (strcmp(name, "count") == 0) {
         return create_count_stage(upstream);
+    }
+    if (strcmp(name, "to-csv") == 0) {
+        return create_to_csv_stage(upstream);
+    }
+    if (strcmp(name, "to-json") == 0) {
+        return create_to_json_stage(upstream);
     }
 
     pipeline_stage_free(upstream);

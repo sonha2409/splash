@@ -125,7 +125,9 @@ static int is_structured_filter(const char *name) {
            strcmp(name, "select") == 0 ||
            strcmp(name, "first") == 0 ||
            strcmp(name, "last") == 0 ||
-           strcmp(name, "count") == 0;
+           strcmp(name, "count") == 0 ||
+           strcmp(name, "to-csv") == 0 ||
+           strcmp(name, "to-json") == 0;
 }
 
 // Execute a pipeline that contains |> structured pipe segments.
@@ -191,6 +193,17 @@ static int execute_structured_pipeline(Pipeline *pl, const char *command_str) {
                 _exit(1);
             }
             close(text_pipe[1]);
+
+            // Detach stdin from terminal so execute_pipeline_impl
+            // does not attempt interactive terminal control (tcsetpgrp)
+            // which would SIGTTOU this child since the parent shell
+            // still owns the terminal.
+            int devnull = open("/dev/null", O_RDONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDIN_FILENO);
+                close(devnull);
+            }
+
             signals_default();
 
             // Build sub-pipeline from commands [0..struct_start-1]

@@ -8,6 +8,7 @@
 #include "pipeline.h"
 #include "table.h"
 #include "test.h"
+#include "util.h"
 #include "value.h"
 
 
@@ -435,6 +436,315 @@ static void test_from_json_string_escapes(void) {
 }
 
 
+// ===== Helper: make a table source stage for to-csv/to-json tests =====
+
+typedef struct {
+    Value *table_val;
+    int yielded;
+} MockTableState;
+
+static Value *mock_table_next(PipelineStage *self) {
+    MockTableState *s = self->state;
+    if (s->yielded || !s->table_val) return NULL;
+    s->yielded = 1;
+    return value_clone(s->table_val);
+}
+
+static void mock_table_free(PipelineStage *self) {
+    MockTableState *s = self->state;
+    if (s->table_val) value_free(s->table_val);
+    free(s);
+}
+
+static PipelineStage *make_table_stage(Table *t) {
+    MockTableState *s = xmalloc(sizeof(MockTableState));
+    s->table_val = t ? value_table(t) : NULL;
+    s->yielded = 0;
+    return pipeline_stage_new(mock_table_next, mock_table_free, s, NULL);
+}
+
+// Helper: drain a stage to a string.
+static char *drain_to_string(PipelineStage *stage) {
+    FILE *f = tmpfile();
+    if (!f) return NULL;
+    pipeline_stage_drain(stage, f);
+
+    long sz = ftell(f);
+    rewind(f);
+    char *buf = xmalloc((size_t)sz + 1);
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    buf[n] = '\0';
+    fclose(f);
+    return buf;
+}
+
+
+// ===== to-csv tests =====
+
+static void test_to_csv_basic(void) {
+    const char *cols[] = {"name", "age"};
+    ValueType types[] = {VALUE_STRING, VALUE_INT};
+    Table *t = table_new(cols, types, 2);
+
+    Value *r1[] = {value_string("Alice"), value_int(30)};
+    table_add_row(t, r1, 2);
+    Value *r2[] = {value_string("Bob"), value_int(25)};
+    table_add_row(t, r2, 2);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-csv");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    ASSERT(strstr(out, "name,age") != NULL);
+    ASSERT(strstr(out, "Alice,30") != NULL);
+    ASSERT(strstr(out, "Bob,25") != NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+static void test_to_csv_quoting(void) {
+    // Fields with commas and quotes need quoting
+    const char *cols[] = {"msg"};
+    ValueType types[] = {VALUE_STRING};
+    Table *t = table_new(cols, types, 1);
+
+    Value *r1[] = {value_string("hello, world")};
+    table_add_row(t, r1, 1);
+    Value *r2[] = {value_string("say \"hi\"")};
+    table_add_row(t, r2, 1);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-csv");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    ASSERT(strstr(out, "\"hello, world\"") != NULL);
+    ASSERT(strstr(out, "\"say \"\"hi\"\"\"") != NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+static void test_to_csv_nil_values(void) {
+    const char *cols[] = {"a", "b"};
+    ValueType types[] = {VALUE_STRING, VALUE_INT};
+    Table *t = table_new(cols, types, 2);
+
+    Value *r1[] = {value_string("x"), value_nil()};
+    table_add_row(t, r1, 2);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-csv");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    // NIL should produce empty field: "x,"
+    ASSERT(strstr(out, "x,") != NULL);
+    // Should NOT contain "nil"
+    ASSERT(strstr(out, "nil") == NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+static void test_to_csv_empty_table(void) {
+    const char *cols[] = {"col1", "col2"};
+    ValueType types[] = {VALUE_STRING, VALUE_STRING};
+    Table *t = table_new(cols, types, 2);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-csv");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    // Header only
+    ASSERT(strstr(out, "col1,col2") != NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+static void test_to_csv_roundtrip(void) {
+    // from-csv → to-csv should produce equivalent CSV
+    const char *csv = "name,score\nAlice,95\nBob,87\n";
+    int fd = make_input_fd(csv);
+    SimpleCommand *from_cmd = make_cmd("from-csv");
+    PipelineStage *src = builtin_create_from_stage(from_cmd, fd);
+    ASSERT_NOT_NULL(src);
+
+    SimpleCommand *to_cmd = make_cmd("to-csv");
+    PipelineStage *stage = builtin_create_stage(to_cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    ASSERT(strstr(out, "name,score") != NULL);
+    ASSERT(strstr(out, "Alice,95") != NULL);
+    ASSERT(strstr(out, "Bob,87") != NULL);
+    free(out);
+    simple_command_free(from_cmd);
+    simple_command_free(to_cmd);
+}
+
+static void test_to_csv_bool_float(void) {
+    const char *cols[] = {"flag", "val"};
+    ValueType types[] = {VALUE_BOOL, VALUE_FLOAT};
+    Table *t = table_new(cols, types, 2);
+
+    Value *r1[] = {value_bool(true), value_float(3.14)};
+    table_add_row(t, r1, 2);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-csv");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    ASSERT(strstr(out, "true") != NULL);
+    ASSERT(strstr(out, "3.14") != NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+
+// ===== to-json tests =====
+
+static void test_to_json_basic(void) {
+    const char *cols[] = {"name", "age"};
+    ValueType types[] = {VALUE_STRING, VALUE_INT};
+    Table *t = table_new(cols, types, 2);
+
+    Value *r1[] = {value_string("Alice"), value_int(30)};
+    table_add_row(t, r1, 2);
+    Value *r2[] = {value_string("Bob"), value_int(25)};
+    table_add_row(t, r2, 2);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-json");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    ASSERT(strstr(out, "\"name\": \"Alice\"") != NULL);
+    ASSERT(strstr(out, "\"age\": 30") != NULL);
+    ASSERT(strstr(out, "\"name\": \"Bob\"") != NULL);
+    ASSERT(strstr(out, "\"age\": 25") != NULL);
+    // Should be a JSON array
+    ASSERT(out[0] == '[');
+    ASSERT(strstr(out, "]") != NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+static void test_to_json_nil_and_bool(void) {
+    const char *cols[] = {"flag", "val"};
+    ValueType types[] = {VALUE_BOOL, VALUE_STRING};
+    Table *t = table_new(cols, types, 2);
+
+    Value *r1[] = {value_bool(true), value_nil()};
+    table_add_row(t, r1, 2);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-json");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    ASSERT(strstr(out, "true") != NULL);
+    ASSERT(strstr(out, "null") != NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+static void test_to_json_empty_table(void) {
+    const char *cols[] = {"x"};
+    ValueType types[] = {VALUE_STRING};
+    Table *t = table_new(cols, types, 1);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-json");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    // Should be empty array
+    ASSERT(strstr(out, "[\n]") != NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+static void test_to_json_string_escaping(void) {
+    const char *cols[] = {"msg"};
+    ValueType types[] = {VALUE_STRING};
+    Table *t = table_new(cols, types, 1);
+
+    Value *r1[] = {value_string("line1\nline2")};
+    table_add_row(t, r1, 1);
+    Value *r2[] = {value_string("say \"hello\"")};
+    table_add_row(t, r2, 1);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-json");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    ASSERT(strstr(out, "\\n") != NULL);
+    ASSERT(strstr(out, "\\\"hello\\\"") != NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+static void test_to_json_roundtrip(void) {
+    // from-json → to-json should produce valid JSON with same data
+    const char *json = "[{\"name\":\"Alice\",\"age\":30},{\"name\":\"Bob\",\"age\":25}]";
+    int fd = make_input_fd(json);
+    SimpleCommand *from_cmd = make_cmd("from-json");
+    PipelineStage *src = builtin_create_from_stage(from_cmd, fd);
+    ASSERT_NOT_NULL(src);
+
+    SimpleCommand *to_cmd = make_cmd("to-json");
+    PipelineStage *stage = builtin_create_stage(to_cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    ASSERT(strstr(out, "\"name\": \"Alice\"") != NULL);
+    ASSERT(strstr(out, "\"age\": 30") != NULL);
+    ASSERT(strstr(out, "\"name\": \"Bob\"") != NULL);
+    ASSERT(strstr(out, "\"age\": 25") != NULL);
+    free(out);
+    simple_command_free(from_cmd);
+    simple_command_free(to_cmd);
+}
+
+static void test_to_json_floats(void) {
+    const char *cols[] = {"val"};
+    ValueType types[] = {VALUE_FLOAT};
+    Table *t = table_new(cols, types, 1);
+
+    Value *r1[] = {value_float(3.14)};
+    table_add_row(t, r1, 1);
+
+    PipelineStage *src = make_table_stage(t);
+    SimpleCommand *cmd = make_cmd("to-json");
+    PipelineStage *stage = builtin_create_stage(cmd, src);
+    ASSERT_NOT_NULL(stage);
+
+    char *out = drain_to_string(stage);
+    ASSERT(strstr(out, "3.14") != NULL);
+    // Should NOT be quoted
+    ASSERT(strstr(out, "\"3.14\"") == NULL);
+    free(out);
+    simple_command_free(cmd);
+}
+
+static void test_to_csv_json_registered(void) {
+    ASSERT(builtin_is_structured("to-csv") == 1);
+    ASSERT(builtin_is_structured("to-json") == 1);
+}
+
+
 // ===== is_from_source tests =====
 
 static void test_is_from_source(void) {
@@ -480,7 +790,24 @@ int main(void) {
     test_from_json_nested_stringified();
     test_from_json_string_escapes();
 
+    // to-csv
+    test_to_csv_basic();
+    test_to_csv_quoting();
+    test_to_csv_nil_values();
+    test_to_csv_empty_table();
+    test_to_csv_roundtrip();
+    test_to_csv_bool_float();
+
+    // to-json
+    test_to_json_basic();
+    test_to_json_nil_and_bool();
+    test_to_json_empty_table();
+    test_to_json_string_escaping();
+    test_to_json_roundtrip();
+    test_to_json_floats();
+
     // Registration
+    test_to_csv_json_registered();
     test_is_from_source();
     test_is_structured_includes_from();
 
