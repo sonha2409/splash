@@ -753,6 +753,23 @@ static int execute_for_command(ForCommand *cmd,
     return status;
 }
 
+// Execute a while/until loop.
+// while: loop while condition exits 0.
+// until: loop until condition exits 0 (i.e., loop while condition exits non-zero).
+static int execute_while_command(WhileCommand *cmd,
+                                 const char *command_str __attribute__((unused))) {
+    int status = 0;
+    for (;;) {
+        int cond_status = executor_execute_line(cmd->cond_src);
+        // while: continue if cond == 0; until: continue if cond != 0
+        if (cmd->is_until ? (cond_status == 0) : (cond_status != 0)) {
+            break;
+        }
+        status = executor_execute_line(cmd->body_src);
+    }
+    return status;
+}
+
 // Execute a single node (pipeline or compound command).
 static int execute_node(Node *node, const char *command_str) {
     switch (node->type) {
@@ -762,6 +779,8 @@ static int execute_node(Node *node, const char *command_str) {
             return execute_if_command(node->if_cmd, command_str);
         case NODE_FOR:
             return execute_for_command(node->for_cmd, command_str);
+        case NODE_WHILE:
+            return execute_while_command(node->while_cmd, command_str);
     }
     return 0;
 }

@@ -6,6 +6,7 @@
 typedef struct CommandList CommandList;
 typedef struct IfCommand IfCommand;
 typedef struct ForCommand ForCommand;
+typedef struct WhileCommand WhileCommand;
 
 typedef enum {
     REDIRECT_OUTPUT,       // >   stdout to file (truncate)
@@ -85,6 +86,7 @@ typedef enum {
     NODE_PIPELINE,
     NODE_IF,
     NODE_FOR,
+    NODE_WHILE,
 } NodeType;
 
 typedef struct {
@@ -93,6 +95,7 @@ typedef struct {
         Pipeline *pipeline;    // NODE_PIPELINE (owned)
         IfCommand *if_cmd;     // NODE_IF (owned)
         ForCommand *for_cmd;   // NODE_FOR (owned)
+        WhileCommand *while_cmd; // NODE_WHILE (owned)
     };
 } Node;
 
@@ -118,6 +121,9 @@ void command_list_add_if(CommandList *list, IfCommand *if_cmd);
 
 // Append a for-command to the list. Ownership of for_cmd is transferred to list.
 void command_list_add_for(CommandList *list, ForCommand *for_cmd);
+
+// Append a while-command to the list. Ownership of while_cmd is transferred to list.
+void command_list_add_while(CommandList *list, WhileCommand *while_cmd);
 
 // Record the operator between the last two entries added.
 // Must be called after adding the second entry.
@@ -157,6 +163,21 @@ void for_command_add_word(ForCommand *cmd, const char *word);
 
 // Free a ForCommand and all its data.
 void for_command_free(ForCommand *cmd);
+
+// while/until condition; do commands; done
+// is_until: false = while (loop while condition succeeds),
+//           true  = until (loop until condition succeeds).
+struct WhileCommand {
+    char *cond_src;    // Raw condition source text (re-evaluated each iteration, owned)
+    char *body_src;    // Raw body source text (re-evaluated each iteration, owned)
+    int is_until;      // 0 = while, 1 = until
+};
+
+// Creates a new WhileCommand. Caller takes ownership.
+WhileCommand *while_command_new(int is_until);
+
+// Free a WhileCommand and all its data.
+void while_command_free(WhileCommand *cmd);
 
 // Creates a new empty IfCommand. Caller takes ownership.
 IfCommand *if_command_new(void);

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "command.h"
@@ -74,7 +75,9 @@ static int is_compound_keyword(Parser *p) {
         return 0;
     }
     return strcmp(peek(p)->value, "if") == 0 ||
-           strcmp(peek(p)->value, "for") == 0;
+           strcmp(peek(p)->value, "for") == 0 ||
+           strcmp(peek(p)->value, "while") == 0 ||
+           strcmp(peek(p)->value, "until") == 0;
 }
 
 // Forward declarations for mutual recursion.
@@ -82,6 +85,7 @@ static CommandList *parse_command_list_until(Parser *p, const char **stops,
                                             int num_stops);
 static IfCommand *parse_if_command(Parser *p);
 static ForCommand *parse_for_command(Parser *p);
+static WhileCommand *parse_while_command(Parser *p, int is_until);
 
 // Parse a simple command: mix of WORD tokens and redirections.
 // Grammar: command = (WORD | redirection)+
@@ -174,6 +178,12 @@ static Node parse_entry(Parser *p) {
         } else if (strcmp(peek(p)->value, "for") == 0) {
             node.type = NODE_FOR;
             node.for_cmd = parse_for_command(p);
+        } else if (strcmp(peek(p)->value, "while") == 0) {
+            node.type = NODE_WHILE;
+            node.while_cmd = parse_while_command(p, 0);
+        } else if (strcmp(peek(p)->value, "until") == 0) {
+            node.type = NODE_WHILE;
+            node.while_cmd = parse_while_command(p, 1);
         } else {
             node.type = NODE_PIPELINE;
             node.pipeline = NULL;
@@ -191,6 +201,7 @@ static int node_is_error(Node *n) {
         case NODE_PIPELINE: return n->pipeline == NULL;
         case NODE_IF:       return n->if_cmd == NULL;
         case NODE_FOR:      return n->for_cmd == NULL;
+        case NODE_WHILE:    return n->while_cmd == NULL;
     }
     return 1;
 }
@@ -206,6 +217,9 @@ static void command_list_add_node(CommandList *list, Node *node) {
             break;
         case NODE_FOR:
             command_list_add_for(list, node->for_cmd);
+            break;
+        case NODE_WHILE:
+            command_list_add_while(list, node->while_cmd);
             break;
     }
 }
@@ -372,6 +386,84 @@ static ForCommand *parse_for_command(Parser *p) {
     }
     advance(p); // consume "done"
 
+    return cmd;
+}
+
+// Parse a while/until loop.
+// Assumes the current token is the WORD "while" or "until".
+// Grammar: while condition; do command_list done
+//          until condition; do command_list done
+static WhileCommand *parse_while_command(Parser *p, int is_until) {
+    const char *keyword = is_until ? "until" : "while";
+    advance(p); // consume "while" or "until"
+
+    // Extract raw condition text from the original input string.
+    int cond_start_pos = peek(p)->pos;
+
+    // Parse condition (to advance past it and validate structure)
+    const char *do_stops[] = {"do"};
+    CommandList *cond_ast = parse_command_list_until(p, do_stops, 1);
+    if (!cond_ast) {
+        return NULL;
+    }
+
+    // Extract raw source text for the condition
+    int cond_end_pos = peek(p)->pos;
+    char *cond_src = NULL;
+    if (p->input && cond_end_pos > cond_start_pos) {
+        int len = cond_end_pos - cond_start_pos;
+        cond_src = xmalloc((size_t)len + 1);
+        memcpy(cond_src, p->input + cond_start_pos, (size_t)len);
+        cond_src[len] = '\0';
+    } else {
+        cond_src = xstrdup("");
+    }
+    command_list_free(cond_ast);
+
+    // Expect "do"
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "do") != 0) {
+        fprintf(stderr, "splash: syntax error: expected 'do' in '%s' loop\n",
+                keyword);
+        free(cond_src);
+        return NULL;
+    }
+    advance(p); // consume "do"
+
+    // Extract raw body text
+    int body_start_pos = peek(p)->pos;
+
+    const char *done_stops[] = {"done"};
+    CommandList *body_ast = parse_command_list_until(p, done_stops, 1);
+    if (!body_ast) {
+        free(cond_src);
+        return NULL;
+    }
+
+    int body_end_pos = peek(p)->pos;
+    char *body_src = NULL;
+    if (p->input && body_end_pos > body_start_pos) {
+        int len = body_end_pos - body_start_pos;
+        body_src = xmalloc((size_t)len + 1);
+        memcpy(body_src, p->input + body_start_pos, (size_t)len);
+        body_src[len] = '\0';
+    } else {
+        body_src = xstrdup("");
+    }
+    command_list_free(body_ast);
+
+    // Expect "done"
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "done") != 0) {
+        fprintf(stderr, "splash: syntax error: expected 'done' in '%s' loop\n",
+                keyword);
+        free(cond_src);
+        free(body_src);
+        return NULL;
+    }
+    advance(p); // consume "done"
+
+    WhileCommand *cmd = while_command_new(is_until);
+    cmd->cond_src = cond_src;
+    cmd->body_src = body_src;
     return cmd;
 }
 

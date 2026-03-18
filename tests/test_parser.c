@@ -633,6 +633,93 @@ static void test_parser_for_nested_in_if(void) {
     token_list_free(tokens);
 }
 
+static void test_parser_while_basic(void) {
+    const char *input = "while true; do echo hello; done";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->num_entries, 1);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_WHILE);
+    WhileCommand *cmd = list->entries[0].while_cmd;
+    ASSERT_NOT_NULL(cmd);
+    ASSERT_INT_EQ(cmd->is_until, 0);
+    ASSERT_NOT_NULL(cmd->cond_src);
+    ASSERT_NOT_NULL(cmd->body_src);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_until_basic(void) {
+    const char *input = "until false; do echo waiting; done";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_WHILE);
+    WhileCommand *cmd = list->entries[0].while_cmd;
+    ASSERT_NOT_NULL(cmd);
+    ASSERT_INT_EQ(cmd->is_until, 1);
+    ASSERT_NOT_NULL(cmd->cond_src);
+    ASSERT_NOT_NULL(cmd->body_src);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_while_multi_body(void) {
+    const char *input = "while test $x -gt 0; do echo $x; echo ok; done";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    WhileCommand *cmd = list->entries[0].while_cmd;
+    ASSERT_NOT_NULL(cmd->body_src);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_while_with_list(void) {
+    TokenList *tokens = tokenizer_tokenize("while true; do echo a; done ; echo end");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->num_entries, 2);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_WHILE);
+    ASSERT_INT_EQ(list->entries[1].type, NODE_PIPELINE);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_while_missing_do(void) {
+    TokenList *tokens = tokenizer_tokenize("while true; echo a; done");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NULL(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_while_missing_done(void) {
+    TokenList *tokens = tokenizer_tokenize("while true; do echo a");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NULL(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_while_nested_in_if(void) {
+    TokenList *tokens = tokenizer_tokenize(
+        "if true; then while false; do echo a; done; fi");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_IF);
+    IfCommand *ic = list->entries[0].if_cmd;
+    ASSERT_INT_EQ(ic->clauses[0].body->entries[0].type, NODE_WHILE);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_while_empty_condition(void) {
+    // "while ; do echo a; done" — empty condition is a syntax error
+    TokenList *tokens = tokenizer_tokenize("while ; do echo a; done");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NULL(list);
+    token_list_free(tokens);
+}
+
 int main(void) {
     printf("test_parser\n");
 
@@ -702,6 +789,16 @@ int main(void) {
     test_parser_for_missing_done();
     test_parser_for_empty_word_list();
     test_parser_for_nested_in_if();
+
+    // while/until
+    test_parser_while_basic();
+    test_parser_until_basic();
+    test_parser_while_multi_body();
+    test_parser_while_with_list();
+    test_parser_while_missing_do();
+    test_parser_while_missing_done();
+    test_parser_while_nested_in_if();
+    test_parser_while_empty_condition();
 
     TEST_REPORT();
 }

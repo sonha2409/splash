@@ -124,3 +124,43 @@ This required adding the original input string as a parameter to `parser_parse(t
 
 - **Unit tests** (8 new in `test_parser.c`): basic, multi-body, with list ops, empty words, nested in if, error cases (missing in/do/done)
 - **Integration tests** (7 new in `test_m8_command_lists.sh`): variable expansion, globs, pipes in body, nesting
+
+## 8.4 `while` / `until` Loops
+
+### Design
+
+```
+while condition; do commands; done
+until condition; do commands; done
+```
+
+- `while`: loop as long as condition exits with status 0
+- `until`: loop as long as condition exits with non-zero status (inverted `while`)
+
+Both condition and body are full command lists. Like `for`, the body and condition are re-evaluated each iteration.
+
+### Implementation
+
+**New AST node**: `WhileCommand` with raw condition source (`cond_src`), raw body source (`body_src`), and `is_until` flag. Single `NODE_WHILE` variant handles both `while` and `until`. Added to the `Node` tagged union.
+
+**Design decision — unified struct**: `while` and `until` differ only in the condition check direction, so they share one struct and parser function (`parse_while_command(p, is_until)`), avoiding code duplication.
+
+**Design decision — raw source text (same as `for`)**: Both `cond_src` and `body_src` store raw substrings from the original input, extracted via token position offsets. The executor re-tokenizes and re-evaluates these each iteration, ensuring variable expansions reflect current state.
+
+**Parser**: `parse_while_command()` consumes the keyword → parses condition via `parse_command_list_until({"do"})` and extracts raw source → expects `do` → parses body via `parse_command_list_until({"done"})` and extracts raw source → expects `done`. `is_compound_keyword()` updated to recognize `"while"` and `"until"`.
+
+**Executor**: `execute_while_command()` loops: evaluates `cond_src` via `executor_execute_line()`, checks exit status (invert for `until`), executes `body_src` if continuing. Returns last body exit status or 0 if body never ran.
+
+### Edge Cases
+
+- **`while false`**: body never runs, returns 0
+- **`until true`**: body never runs, returns 0
+- **Nested**: `while` inside `if`, `for` inside `while`, etc. all work through raw-body re-evaluation
+- **Empty body**: valid, just re-evaluates condition each pass
+- **Multi-command condition**: `while test $x -gt 0; do ...` — condition is a full command list
+- **No `break`/`continue` yet**: will be added as a separate feature; currently loops must terminate via condition change
+
+### Testing
+
+- **Unit tests** (8 new in `test_parser.c`): basic while, basic until, multi-body, with list ops, nested in if, error cases (missing do/done, empty condition)
+- **Manual tests** (9 cases): basic while, while false, until true, until body runs, nesting with if/for, multi-command body, error cases

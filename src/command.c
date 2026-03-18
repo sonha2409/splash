@@ -118,6 +118,9 @@ void node_free(Node *node) {
         case NODE_FOR:
             for_command_free(node->for_cmd);
             break;
+        case NODE_WHILE:
+            while_command_free(node->while_cmd);
+            break;
     }
 }
 
@@ -152,6 +155,13 @@ void command_list_add_for(CommandList *list, ForCommand *for_cmd) {
     command_list_grow(list);
     list->entries[list->num_entries].type = NODE_FOR;
     list->entries[list->num_entries].for_cmd = for_cmd;
+    list->num_entries++;
+}
+
+void command_list_add_while(CommandList *list, WhileCommand *while_cmd) {
+    command_list_grow(list);
+    list->entries[list->num_entries].type = NODE_WHILE;
+    list->entries[list->num_entries].while_cmd = while_cmd;
     list->num_entries++;
 }
 
@@ -210,6 +220,23 @@ void for_command_free(ForCommand *cmd) {
         free(cmd->words[i]);
     }
     free(cmd->words);
+    free(cmd->body_src);
+    free(cmd);
+}
+
+WhileCommand *while_command_new(int is_until) {
+    WhileCommand *cmd = xmalloc(sizeof(WhileCommand));
+    cmd->cond_src = NULL;
+    cmd->body_src = NULL;
+    cmd->is_until = is_until;
+    return cmd;
+}
+
+void while_command_free(WhileCommand *cmd) {
+    if (!cmd) {
+        return;
+    }
+    free(cmd->cond_src);
     free(cmd->body_src);
     free(cmd);
 }
