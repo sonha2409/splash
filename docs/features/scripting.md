@@ -44,3 +44,49 @@ CommandList
 
 - **Unit tests** (10 new in `test_parser.c`): semicolons, &&, ||, mixed operators, trailing semicolon, error cases
 - **Integration tests** (16 in `test_m8_command_lists.sh`): end-to-end with real command execution, pipe interaction, chained operators
+
+## 8.2 `if/elif/else/fi`
+
+### Design
+
+Conditional execution based on exit codes:
+
+```
+if condition; then body; fi
+if condition; then body; else body; fi
+if cond1; then body1; elif cond2; then body2; else body3; fi
+```
+
+Conditions and bodies are full command lists (can contain `;`, `&&`, `||`, pipes, nested if-blocks).
+
+### Implementation
+
+**AST refactor**: `CommandList` entries changed from `Pipeline**` to `Node*` — a tagged union (`NODE_PIPELINE` or `NODE_IF`). This makes compound commands first-class entries in command lists, extensible for `for`/`while`/`case` later.
+
+New types in `command.h`:
+- `NodeType` enum, `Node` tagged union
+- `IfClause` (condition + body pair)
+- `IfCommand` (array of clauses + optional else_body)
+
+**Parser**: Refactored into three mutually recursive functions:
+- `parse_command_list_until(stops)` — parses entries separated by `;`/`&&`/`||`, stopping at keyword stop words (e.g., `then`, `elif`, `else`, `fi`)
+- `parse_entry()` — dispatches to `parse_if_command()` or `parse_pipeline()` based on keyword detection
+- `parse_if_command()` — parses the full `if/then/elif/else/fi` structure
+
+`parser_parse()` is now a thin wrapper around `parse_command_list_until(NULL, 0)`.
+
+**Executor**: `execute_node()` dispatches on node type. `execute_if_command()` evaluates each clause's condition list; if exit code is 0, executes the body and returns. Falls through to else_body if no clause matched.
+
+### Edge Cases
+
+- **Nested if**: `if true; then if false; then a; else b; fi; fi` — inner `fi` correctly matched
+- **Compound conditions**: `if true && false; then ...` — condition is a full command list
+- **Multi-command bodies**: `if true; then echo a; echo b; fi`
+- **Mixed with list operators**: `if true; then echo yes; fi && echo ok`
+- **Missing `then`**: produces `splash: syntax error: expected 'then'`
+- **Missing `fi`**: produces `splash: syntax error: expected 'fi'`
+
+### Testing
+
+- **Unit tests** (10 new in `test_parser.c`): basic if, if-else, if-elif-else, nested if, compound conditions, multi-body, error cases (missing then/fi)
+- **Integration tests** (13 new in `test_m8_command_lists.sh`): all branches, nesting, pipes in body, && with if-blocks

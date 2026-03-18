@@ -92,6 +92,49 @@ world" "$OUT"
 OUT=$(echo 'true && echo hello | tr a-z A-Z' | $SHELL_BIN 2>/dev/null)
 assert_eq "and then pipe" "HELLO" "$OUT"
 
+# --- if/elif/else/fi ---
+
+OUT=$(echo 'if true; then echo yes; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if: true branch" "yes" "$OUT"
+
+OUT=$(echo 'if false; then echo no; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if: false branch (no output)" "" "$OUT"
+
+OUT=$(echo 'if false; then echo no; else echo yes; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if-else: else branch" "yes" "$OUT"
+
+OUT=$(echo 'if true; then echo yes; else echo no; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if-else: if branch" "yes" "$OUT"
+
+OUT=$(echo 'if false; then echo a; elif true; then echo b; else echo c; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if-elif-else: elif branch" "b" "$OUT"
+
+OUT=$(echo 'if false; then echo a; elif false; then echo b; else echo c; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if-elif-else: else branch" "c" "$OUT"
+
+OUT=$(echo 'if false; then echo a; elif false; then echo b; elif true; then echo c; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if-elif-elif: third branch" "c" "$OUT"
+
+OUT=$(echo 'if true; then echo a; echo b; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if: multi-command body" "a
+b" "$OUT"
+
+OUT=$(echo 'if true; then echo yes; fi ; echo done' | $SHELL_BIN 2>/dev/null)
+assert_eq "if then semicolon" "yes
+done" "$OUT"
+
+OUT=$(echo 'if false; then echo no; fi && echo ok' | $SHELL_BIN 2>/dev/null)
+assert_eq "if with && (if returns 0)" "ok" "$OUT"
+
+OUT=$(echo 'if true && false; then echo no; else echo yes; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if: compound condition" "yes" "$OUT"
+
+OUT=$(echo 'if true; then if false; then echo a; else echo b; fi; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "nested if" "b" "$OUT"
+
+OUT=$(echo 'if true; then echo hello | tr a-z A-Z; fi' | $SHELL_BIN 2>/dev/null)
+assert_eq "if: pipe in body" "HELLO" "$OUT"
+
 # --- Summary ---
 echo ""
 echo "  Results: $PASS passed, $FAIL failed"

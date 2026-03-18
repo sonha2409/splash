@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "command.h"
 #include "parser.h"
@@ -45,6 +46,39 @@ static RedirectType token_to_redirect_type(TokenType type) {
     }
 }
 
+// Return true if the token is a list separator (;, &&, ||).
+static int is_list_operator(TokenType type) {
+    return type == TOKEN_SEMICOLON ||
+           type == TOKEN_AND ||
+           type == TOKEN_OR;
+}
+
+// Return true if the current token is a WORD matching one of the stop words.
+static int is_stop_word(Parser *p, const char **stops, int num_stops) {
+    if (peek(p)->type != TOKEN_WORD) {
+        return 0;
+    }
+    for (int i = 0; i < num_stops; i++) {
+        if (strcmp(peek(p)->value, stops[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Return true if the current token is a keyword that starts a compound command.
+static int is_compound_keyword(Parser *p) {
+    if (peek(p)->type != TOKEN_WORD) {
+        return 0;
+    }
+    return strcmp(peek(p)->value, "if") == 0;
+}
+
+// Forward declarations for mutual recursion.
+static CommandList *parse_command_list_until(Parser *p, const char **stops,
+                                            int num_stops);
+static IfCommand *parse_if_command(Parser *p);
+
 // Parse a simple command: mix of WORD tokens and redirections.
 // Grammar: command = (WORD | redirection)+
 //          redirection = REDIRECT_OP WORD
@@ -86,13 +120,6 @@ static SimpleCommand *parse_simple_command(Parser *p) {
     return cmd;
 }
 
-// Return true if the token is a list separator (;, &&, ||).
-static int is_list_operator(TokenType type) {
-    return type == TOKEN_SEMICOLON ||
-           type == TOKEN_AND ||
-           type == TOKEN_OR;
-}
-
 // Parse a single pipeline: command (PIPE command)*
 // Returns NULL on error (with message printed).
 static Pipeline *parse_pipeline(Parser *p) {
@@ -131,6 +158,206 @@ static Pipeline *parse_pipeline(Parser *p) {
     return pl;
 }
 
+// Parse a single entry in a command list: either a compound command (if/for/...)
+// or a pipeline. Returns a Node with the parsed result.
+// On error, returns a NODE_PIPELINE with pipeline=NULL.
+static Node parse_entry(Parser *p) {
+    Node node;
+    if (is_compound_keyword(p)) {
+        if (strcmp(peek(p)->value, "if") == 0) {
+            node.type = NODE_IF;
+            node.if_cmd = parse_if_command(p);
+        } else {
+            // Unreachable for now — is_compound_keyword only matches "if"
+            node.type = NODE_PIPELINE;
+            node.pipeline = NULL;
+        }
+    } else {
+        node.type = NODE_PIPELINE;
+        node.pipeline = parse_pipeline(p);
+    }
+    return node;
+}
+
+// Return true if a node represents a parse error.
+static int node_is_error(Node *n) {
+    switch (n->type) {
+        case NODE_PIPELINE: return n->pipeline == NULL;
+        case NODE_IF:       return n->if_cmd == NULL;
+    }
+    return 1;
+}
+
+// Map a list operator token to its type.
+static ListOpType token_to_list_op(TokenType type) {
+    if (type == TOKEN_AND) return LIST_AND;
+    if (type == TOKEN_OR) return LIST_OR;
+    return LIST_SEMI;
+}
+
+// Parse a command list, stopping when we hit a WORD that matches one of the
+// stop words at command position. The stop word is NOT consumed.
+// If stops is NULL / num_stops is 0, only stops at EOF/NEWLINE/INCOMPLETE.
+// Returns NULL on parse error.
+static CommandList *parse_command_list_until(Parser *p, const char **stops,
+                                            int num_stops) {
+    // Skip leading newlines/semicolons
+    while (peek(p)->type == TOKEN_NEWLINE) {
+        advance(p);
+    }
+
+    // Check for immediate stop word or end of input
+    if (is_stop_word(p, stops, num_stops) ||
+        peek(p)->type == TOKEN_EOF ||
+        peek(p)->type == TOKEN_INCOMPLETE) {
+        // Empty command list
+        return command_list_new();
+    }
+
+    Node node = parse_entry(p);
+    if (node_is_error(&node)) {
+        // Print error for unexpected tokens (leading |, ;, etc.)
+        TokenType t = peek(p)->type;
+        if (t != TOKEN_EOF && t != TOKEN_NEWLINE && t != TOKEN_INCOMPLETE) {
+            fprintf(stderr, "splash: syntax error: unexpected token '%s'\n",
+                    peek(p)->value);
+        }
+        return NULL;
+    }
+
+    CommandList *list = command_list_new();
+    if (node.type == NODE_PIPELINE) {
+        command_list_add_pipeline(list, node.pipeline);
+    } else {
+        command_list_add_if(list, node.if_cmd);
+    }
+
+    // Parse remaining entries separated by ; && ||
+    while (is_list_operator(peek(p)->type)) {
+        Token *op_tok = advance(p);
+        ListOpType op = token_to_list_op(op_tok->type);
+
+        // Skip newlines after operator
+        while (peek(p)->type == TOKEN_NEWLINE) {
+            advance(p);
+        }
+
+        // Trailing semicolon is valid before stop word, EOF, or NEWLINE
+        if (op == LIST_SEMI) {
+            if (peek(p)->type == TOKEN_EOF ||
+                peek(p)->type == TOKEN_NEWLINE ||
+                peek(p)->type == TOKEN_INCOMPLETE ||
+                is_stop_word(p, stops, num_stops)) {
+                break;
+            }
+        }
+
+        node = parse_entry(p);
+        if (node_is_error(&node)) {
+            fprintf(stderr, "splash: syntax error: expected command after '%s'\n",
+                    op_tok->value);
+            command_list_free(list);
+            return NULL;
+        }
+        if (node.type == NODE_PIPELINE) {
+            command_list_add_pipeline(list, node.pipeline);
+        } else {
+            command_list_add_if(list, node.if_cmd);
+        }
+        command_list_add_operator(list, op);
+    }
+
+    // Skip trailing newlines
+    while (peek(p)->type == TOKEN_NEWLINE) {
+        advance(p);
+    }
+
+    return list;
+}
+
+// Parse an if/elif/else/fi compound command.
+// Assumes the current token is the WORD "if".
+static IfCommand *parse_if_command(Parser *p) {
+    advance(p); // consume "if"
+
+    const char *then_stops[] = {"then"};
+    const char *body_stops[] = {"elif", "else", "fi"};
+    const char *fi_stops[] = {"fi"};
+
+    // Parse condition
+    CommandList *condition = parse_command_list_until(p, then_stops, 1);
+    if (!condition) {
+        return NULL;
+    }
+
+    // Expect "then"
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "then") != 0) {
+        fprintf(stderr, "splash: syntax error: expected 'then'\n");
+        command_list_free(condition);
+        return NULL;
+    }
+    advance(p); // consume "then"
+
+    // Parse body
+    CommandList *body = parse_command_list_until(p, body_stops, 3);
+    if (!body) {
+        command_list_free(condition);
+        return NULL;
+    }
+
+    IfCommand *cmd = if_command_new();
+    if_command_add_clause(cmd, condition, body);
+
+    // Handle elif clauses
+    while (peek(p)->type == TOKEN_WORD && strcmp(peek(p)->value, "elif") == 0) {
+        advance(p); // consume "elif"
+
+        condition = parse_command_list_until(p, then_stops, 1);
+        if (!condition) {
+            if_command_free(cmd);
+            return NULL;
+        }
+
+        if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "then") != 0) {
+            fprintf(stderr, "splash: syntax error: expected 'then' after 'elif'\n");
+            command_list_free(condition);
+            if_command_free(cmd);
+            return NULL;
+        }
+        advance(p); // consume "then"
+
+        body = parse_command_list_until(p, body_stops, 3);
+        if (!body) {
+            command_list_free(condition);
+            if_command_free(cmd);
+            return NULL;
+        }
+
+        if_command_add_clause(cmd, condition, body);
+    }
+
+    // Handle else
+    if (peek(p)->type == TOKEN_WORD && strcmp(peek(p)->value, "else") == 0) {
+        advance(p); // consume "else"
+
+        cmd->else_body = parse_command_list_until(p, fi_stops, 1);
+        if (!cmd->else_body) {
+            if_command_free(cmd);
+            return NULL;
+        }
+    }
+
+    // Expect "fi"
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "fi") != 0) {
+        fprintf(stderr, "splash: syntax error: expected 'fi'\n");
+        if_command_free(cmd);
+        return NULL;
+    }
+    advance(p); // consume "fi"
+
+    return cmd;
+}
+
 CommandList *parser_parse(const TokenList *tokens) {
     if (!tokens || tokens->count == 0) {
         return NULL;
@@ -153,54 +380,15 @@ CommandList *parser_parse(const TokenList *tokens) {
         return NULL;
     }
 
-    // Parse first pipeline
-    Pipeline *pl = parse_pipeline(&p);
-    if (!pl) {
-        // parse_pipeline prints errors for most cases.
-        // For leading operators like ; or &&, print a generic error.
-        TokenType t = peek(&p)->type;
-        if (t != TOKEN_EOF && t != TOKEN_NEWLINE) {
-            fprintf(stderr, "splash: syntax error: unexpected token '%s'\n",
-                    peek(&p)->value);
-        }
+    CommandList *list = parse_command_list_until(&p, NULL, 0);
+    if (!list) {
         return NULL;
     }
 
-    CommandList *list = command_list_new();
-    command_list_add_pipeline(list, pl);
-
-    // Parse remaining pipelines separated by ; && ||
-    while (is_list_operator(peek(&p)->type)) {
-        Token *op_tok = advance(&p);
-        ListOpType op;
-        if (op_tok->type == TOKEN_SEMICOLON) {
-            op = LIST_SEMI;
-        } else if (op_tok->type == TOKEN_AND) {
-            op = LIST_AND;
-        } else {
-            op = LIST_OR;
-        }
-
-        // Skip newlines after operator (for multiline input)
-        while (peek(&p)->type == TOKEN_NEWLINE) {
-            advance(&p);
-        }
-
-        // Trailing semicolon is valid (no more commands)
-        if (op == LIST_SEMI &&
-            (peek(&p)->type == TOKEN_EOF || peek(&p)->type == TOKEN_NEWLINE)) {
-            break;
-        }
-
-        pl = parse_pipeline(&p);
-        if (!pl) {
-            fprintf(stderr, "splash: syntax error: expected command after '%s'\n",
-                    op_tok->value);
-            command_list_free(list);
-            return NULL;
-        }
-        command_list_add_pipeline(list, pl);
-        command_list_add_operator(list, op);
+    // Empty list (shouldn't happen at top-level since we checked for EOF)
+    if (list->num_entries == 0) {
+        command_list_free(list);
+        return NULL;
     }
 
     // Incomplete input — discard partial parse, no error

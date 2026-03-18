@@ -689,14 +689,60 @@ static char *expand_aliases(const char *line) {
     return expanded;
 }
 
+// Execute a single pipeline entry: expand globs, track $_, run.
+static int execute_pipeline_entry(Pipeline *pl, const char *command_str) {
+    // Expand globs in all commands
+    for (int ci = 0; ci < pl->num_commands; ci++) {
+        expand_glob_argv(pl->commands[ci]);
+    }
+
+    // Track $_ (last argument of the command)
+    if (pl->num_commands > 0) {
+        SimpleCommand *last_cmd = pl->commands[pl->num_commands - 1];
+        if (last_cmd->argc > 0) {
+            expand_set_last_arg(last_cmd->argv[last_cmd->argc - 1]);
+        }
+    }
+
+    return executor_execute(pl, command_str);
+}
+
+// Execute an if/elif/else/fi command.
+// Evaluates each clause's condition; if exit code is 0, executes the body.
+// Falls through to else_body if no clause matched.
+static int execute_if_command(IfCommand *cmd, const char *command_str) {
+    for (int i = 0; i < cmd->num_clauses; i++) {
+        int cond_status = executor_execute_list(cmd->clauses[i].condition,
+                                                command_str);
+        if (cond_status == 0) {
+            return executor_execute_list(cmd->clauses[i].body, command_str);
+        }
+    }
+    if (cmd->else_body) {
+        return executor_execute_list(cmd->else_body, command_str);
+    }
+    return 0;
+}
+
+// Execute a single node (pipeline or compound command).
+static int execute_node(Node *node, const char *command_str) {
+    switch (node->type) {
+        case NODE_PIPELINE:
+            return execute_pipeline_entry(node->pipeline, command_str);
+        case NODE_IF:
+            return execute_if_command(node->if_cmd, command_str);
+    }
+    return 0;
+}
+
 int executor_execute_list(CommandList *list, const char *command_str) {
-    if (!list || list->num_pipelines == 0) {
+    if (!list || list->num_entries == 0) {
         return 0;
     }
 
     int status = 0;
-    for (int i = 0; i < list->num_pipelines; i++) {
-        // Check operator before this pipeline (skip for first)
+    for (int i = 0; i < list->num_entries; i++) {
+        // Check operator before this entry (skip for first)
         if (i > 0) {
             ListOpType op = list->operators[i - 1];
             if (op == LIST_AND && status != 0) {
@@ -707,22 +753,7 @@ int executor_execute_list(CommandList *list, const char *command_str) {
             }
         }
 
-        Pipeline *pl = list->pipelines[i];
-
-        // Expand globs in all commands
-        for (int ci = 0; ci < pl->num_commands; ci++) {
-            expand_glob_argv(pl->commands[ci]);
-        }
-
-        // Track $_ (last argument of the command)
-        if (pl->num_commands > 0) {
-            SimpleCommand *last_cmd = pl->commands[pl->num_commands - 1];
-            if (last_cmd->argc > 0) {
-                expand_set_last_arg(last_cmd->argv[last_cmd->argc - 1]);
-            }
-        }
-
-        status = executor_execute(pl, command_str);
+        status = execute_node(&list->entries[i], command_str);
         expand_set_last_status(status);
     }
 

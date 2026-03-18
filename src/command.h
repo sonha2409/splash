@@ -1,6 +1,11 @@
 #ifndef SPLASH_COMMAND_H
 #define SPLASH_COMMAND_H
 
+// Forward declarations for mutual recursion (IfCommand contains CommandList,
+// CommandList contains Node, Node contains IfCommand).
+typedef struct CommandList CommandList;
+typedef struct IfCommand IfCommand;
+
 typedef enum {
     REDIRECT_OUTPUT,       // >   stdout to file (truncate)
     REDIRECT_APPEND,       // >>  stdout to file (append)
@@ -67,20 +72,37 @@ void pipeline_add_pipe_type(Pipeline *pl, PipeType type);
 // Free a Pipeline and all its commands.
 void pipeline_free(Pipeline *pl);
 
-// Operator connecting two pipelines in a command list.
+// Operator connecting two entries in a command list.
 typedef enum {
     LIST_SEMI,  // ;  — sequential, ignore exit code
     LIST_AND,   // && — execute next only if previous succeeded
     LIST_OR     // || — execute next only if previous failed
 } ListOpType;
 
-// A list of one or more pipelines connected by ;, &&, or ||.
+// Tagged union: an entry in a command list is either a pipeline or a compound command.
+typedef enum {
+    NODE_PIPELINE,
+    NODE_IF,
+} NodeType;
+
 typedef struct {
-    Pipeline **pipelines;     // Array of pipeline pointers (owned)
-    ListOpType *operators;    // Array of operators between pipelines (count = num_pipelines - 1)
-    int num_pipelines;
-    int pipeline_capacity;
-} CommandList;
+    NodeType type;
+    union {
+        Pipeline *pipeline;    // NODE_PIPELINE (owned)
+        IfCommand *if_cmd;     // NODE_IF (owned)
+    };
+} Node;
+
+// Free the contents of a Node (dispatches to pipeline_free or if_command_free).
+void node_free(Node *node);
+
+// A list of one or more nodes (pipelines/compound commands) connected by ;, &&, or ||.
+struct CommandList {
+    Node *entries;            // Array of Node structs (owned)
+    ListOpType *operators;    // Array of operators between entries (count = num_entries - 1)
+    int num_entries;
+    int capacity;
+};
 
 // Creates a new empty CommandList. Caller takes ownership.
 CommandList *command_list_new(void);
@@ -88,11 +110,37 @@ CommandList *command_list_new(void);
 // Append a pipeline to the list. Ownership of pl is transferred to list.
 void command_list_add_pipeline(CommandList *list, Pipeline *pl);
 
-// Record the operator between the last two pipelines added.
-// Must be called after adding the second pipeline.
+// Append an if-command to the list. Ownership of if_cmd is transferred to list.
+void command_list_add_if(CommandList *list, IfCommand *if_cmd);
+
+// Record the operator between the last two entries added.
+// Must be called after adding the second entry.
 void command_list_add_operator(CommandList *list, ListOpType op);
 
-// Free a CommandList and all its pipelines.
+// Free a CommandList and all its entries.
 void command_list_free(CommandList *list);
+
+// One branch of an if/elif chain.
+typedef struct {
+    CommandList *condition;   // Command list evaluated for exit code (owned)
+    CommandList *body;        // Executed if condition succeeds (owned)
+} IfClause;
+
+// if condition; then body; [elif condition; then body;]* [else body;] fi
+struct IfCommand {
+    IfClause *clauses;        // Array: clauses[0]=if, clauses[1..n-1]=elif (owned)
+    int num_clauses;
+    int clause_capacity;
+    CommandList *else_body;   // NULL if no else block (owned)
+};
+
+// Creates a new empty IfCommand. Caller takes ownership.
+IfCommand *if_command_new(void);
+
+// Append a clause (condition + body). Ownership transferred.
+void if_command_add_clause(IfCommand *cmd, CommandList *condition, CommandList *body);
+
+// Free an IfCommand and all its clauses.
+void if_command_free(IfCommand *cmd);
 
 #endif // SPLASH_COMMAND_H

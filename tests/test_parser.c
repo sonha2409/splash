@@ -10,10 +10,10 @@ static Pipeline *parse_single_pipeline(const char *input, CommandList **out_list
     CommandList *list = parser_parse(tokens);
     token_list_free(tokens);
     *out_list = list;
-    if (!list || list->num_pipelines == 0) {
+    if (!list || list->num_entries == 0) {
         return NULL;
     }
-    return list->pipelines[0];
+    return list->entries[0].pipeline;
 }
 
 static void test_parser_empty_input(void) {
@@ -313,11 +313,11 @@ static void test_parser_semicolon_two_commands(void) {
     TokenList *tokens = tokenizer_tokenize("echo hello ; echo world");
     CommandList *list = parser_parse(tokens);
     ASSERT_NOT_NULL(list);
-    ASSERT_INT_EQ(list->num_pipelines, 2);
-    ASSERT_STR_EQ(list->pipelines[0]->commands[0]->argv[0], "echo");
-    ASSERT_STR_EQ(list->pipelines[0]->commands[0]->argv[1], "hello");
-    ASSERT_STR_EQ(list->pipelines[1]->commands[0]->argv[0], "echo");
-    ASSERT_STR_EQ(list->pipelines[1]->commands[0]->argv[1], "world");
+    ASSERT_INT_EQ(list->num_entries, 2);
+    ASSERT_STR_EQ(list->entries[0].pipeline->commands[0]->argv[0], "echo");
+    ASSERT_STR_EQ(list->entries[0].pipeline->commands[0]->argv[1], "hello");
+    ASSERT_STR_EQ(list->entries[1].pipeline->commands[0]->argv[0], "echo");
+    ASSERT_STR_EQ(list->entries[1].pipeline->commands[0]->argv[1], "world");
     ASSERT_INT_EQ(list->operators[0], LIST_SEMI);
     command_list_free(list);
     token_list_free(tokens);
@@ -327,10 +327,10 @@ static void test_parser_and_operator(void) {
     TokenList *tokens = tokenizer_tokenize("true && echo ok");
     CommandList *list = parser_parse(tokens);
     ASSERT_NOT_NULL(list);
-    ASSERT_INT_EQ(list->num_pipelines, 2);
+    ASSERT_INT_EQ(list->num_entries, 2);
     ASSERT_INT_EQ(list->operators[0], LIST_AND);
-    ASSERT_STR_EQ(list->pipelines[0]->commands[0]->argv[0], "true");
-    ASSERT_STR_EQ(list->pipelines[1]->commands[0]->argv[0], "echo");
+    ASSERT_STR_EQ(list->entries[0].pipeline->commands[0]->argv[0], "true");
+    ASSERT_STR_EQ(list->entries[1].pipeline->commands[0]->argv[0], "echo");
     command_list_free(list);
     token_list_free(tokens);
 }
@@ -339,10 +339,10 @@ static void test_parser_or_operator(void) {
     TokenList *tokens = tokenizer_tokenize("false || echo fallback");
     CommandList *list = parser_parse(tokens);
     ASSERT_NOT_NULL(list);
-    ASSERT_INT_EQ(list->num_pipelines, 2);
+    ASSERT_INT_EQ(list->num_entries, 2);
     ASSERT_INT_EQ(list->operators[0], LIST_OR);
-    ASSERT_STR_EQ(list->pipelines[0]->commands[0]->argv[0], "false");
-    ASSERT_STR_EQ(list->pipelines[1]->commands[0]->argv[0], "echo");
+    ASSERT_STR_EQ(list->entries[0].pipeline->commands[0]->argv[0], "false");
+    ASSERT_STR_EQ(list->entries[1].pipeline->commands[0]->argv[0], "echo");
     command_list_free(list);
     token_list_free(tokens);
 }
@@ -351,7 +351,7 @@ static void test_parser_mixed_operators(void) {
     TokenList *tokens = tokenizer_tokenize("cmd1 && cmd2 || cmd3 ; cmd4");
     CommandList *list = parser_parse(tokens);
     ASSERT_NOT_NULL(list);
-    ASSERT_INT_EQ(list->num_pipelines, 4);
+    ASSERT_INT_EQ(list->num_entries, 4);
     ASSERT_INT_EQ(list->operators[0], LIST_AND);
     ASSERT_INT_EQ(list->operators[1], LIST_OR);
     ASSERT_INT_EQ(list->operators[2], LIST_SEMI);
@@ -363,8 +363,8 @@ static void test_parser_trailing_semicolon(void) {
     TokenList *tokens = tokenizer_tokenize("echo hello ;");
     CommandList *list = parser_parse(tokens);
     ASSERT_NOT_NULL(list);
-    ASSERT_INT_EQ(list->num_pipelines, 1); // trailing ; doesn't create empty pipeline
-    ASSERT_STR_EQ(list->pipelines[0]->commands[0]->argv[0], "echo");
+    ASSERT_INT_EQ(list->num_entries, 1); // trailing ; doesn't create empty pipeline
+    ASSERT_STR_EQ(list->entries[0].pipeline->commands[0]->argv[0], "echo");
     command_list_free(list);
     token_list_free(tokens);
 }
@@ -373,9 +373,9 @@ static void test_parser_semicolon_with_pipes(void) {
     TokenList *tokens = tokenizer_tokenize("ls | grep foo ; echo done");
     CommandList *list = parser_parse(tokens);
     ASSERT_NOT_NULL(list);
-    ASSERT_INT_EQ(list->num_pipelines, 2);
-    ASSERT_INT_EQ(list->pipelines[0]->num_commands, 2); // ls | grep foo
-    ASSERT_INT_EQ(list->pipelines[1]->num_commands, 1); // echo done
+    ASSERT_INT_EQ(list->num_entries, 2);
+    ASSERT_INT_EQ(list->entries[0].pipeline->num_commands, 2); // ls | grep foo
+    ASSERT_INT_EQ(list->entries[1].pipeline->num_commands, 1); // echo done
     ASSERT_INT_EQ(list->operators[0], LIST_SEMI);
     command_list_free(list);
     token_list_free(tokens);
@@ -406,10 +406,142 @@ static void test_parser_three_semicolons(void) {
     TokenList *tokens = tokenizer_tokenize("a ; b ; c");
     CommandList *list = parser_parse(tokens);
     ASSERT_NOT_NULL(list);
-    ASSERT_INT_EQ(list->num_pipelines, 3);
-    ASSERT_STR_EQ(list->pipelines[0]->commands[0]->argv[0], "a");
-    ASSERT_STR_EQ(list->pipelines[1]->commands[0]->argv[0], "b");
-    ASSERT_STR_EQ(list->pipelines[2]->commands[0]->argv[0], "c");
+    ASSERT_INT_EQ(list->num_entries, 3);
+    ASSERT_STR_EQ(list->entries[0].pipeline->commands[0]->argv[0], "a");
+    ASSERT_STR_EQ(list->entries[1].pipeline->commands[0]->argv[0], "b");
+    ASSERT_STR_EQ(list->entries[2].pipeline->commands[0]->argv[0], "c");
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+// --- if/elif/else/fi tests ---
+
+static void test_parser_if_basic(void) {
+    TokenList *tokens = tokenizer_tokenize("if true; then echo yes; fi");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->num_entries, 1);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_IF);
+    IfCommand *cmd = list->entries[0].if_cmd;
+    ASSERT_NOT_NULL(cmd);
+    ASSERT_INT_EQ(cmd->num_clauses, 1);
+    // Condition: "true"
+    ASSERT_INT_EQ(cmd->clauses[0].condition->num_entries, 1);
+    ASSERT_STR_EQ(cmd->clauses[0].condition->entries[0].pipeline->commands[0]->argv[0], "true");
+    // Body: "echo yes"
+    ASSERT_INT_EQ(cmd->clauses[0].body->num_entries, 1);
+    ASSERT_STR_EQ(cmd->clauses[0].body->entries[0].pipeline->commands[0]->argv[0], "echo");
+    ASSERT_STR_EQ(cmd->clauses[0].body->entries[0].pipeline->commands[0]->argv[1], "yes");
+    ASSERT_NULL(cmd->else_body);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_if_else(void) {
+    TokenList *tokens = tokenizer_tokenize("if false; then echo no; else echo yes; fi");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NOT_NULL(list);
+    IfCommand *cmd = list->entries[0].if_cmd;
+    ASSERT_INT_EQ(cmd->num_clauses, 1);
+    ASSERT_NOT_NULL(cmd->else_body);
+    ASSERT_INT_EQ(cmd->else_body->num_entries, 1);
+    ASSERT_STR_EQ(cmd->else_body->entries[0].pipeline->commands[0]->argv[1], "yes");
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_if_elif_else(void) {
+    TokenList *tokens = tokenizer_tokenize(
+        "if false; then echo a; elif true; then echo b; else echo c; fi");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NOT_NULL(list);
+    IfCommand *cmd = list->entries[0].if_cmd;
+    ASSERT_INT_EQ(cmd->num_clauses, 2);
+    ASSERT_NOT_NULL(cmd->else_body);
+    // elif condition: "true"
+    ASSERT_STR_EQ(cmd->clauses[1].condition->entries[0].pipeline->commands[0]->argv[0], "true");
+    // elif body: "echo b"
+    ASSERT_STR_EQ(cmd->clauses[1].body->entries[0].pipeline->commands[0]->argv[1], "b");
+    // else body: "echo c"
+    ASSERT_STR_EQ(cmd->else_body->entries[0].pipeline->commands[0]->argv[1], "c");
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_if_with_list(void) {
+    // if-command followed by another command via ;
+    TokenList *tokens = tokenizer_tokenize("if true; then echo yes; fi ; echo done");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->num_entries, 2);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_IF);
+    ASSERT_INT_EQ(list->entries[1].type, NODE_PIPELINE);
+    ASSERT_STR_EQ(list->entries[1].pipeline->commands[0]->argv[1], "done");
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_if_and_operator(void) {
+    // if-command with && operator
+    TokenList *tokens = tokenizer_tokenize("if true; then echo yes; fi && echo ok");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->num_entries, 2);
+    ASSERT_INT_EQ(list->operators[0], LIST_AND);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_if_compound_condition(void) {
+    // Condition with && inside
+    TokenList *tokens = tokenizer_tokenize("if true && false; then echo no; fi");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NOT_NULL(list);
+    IfCommand *cmd = list->entries[0].if_cmd;
+    ASSERT_INT_EQ(cmd->clauses[0].condition->num_entries, 2);
+    ASSERT_INT_EQ(cmd->clauses[0].condition->operators[0], LIST_AND);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_if_multi_body(void) {
+    // Body with multiple commands
+    TokenList *tokens = tokenizer_tokenize("if true; then echo a; echo b; fi");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NOT_NULL(list);
+    IfCommand *cmd = list->entries[0].if_cmd;
+    ASSERT_INT_EQ(cmd->clauses[0].body->num_entries, 2);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_if_missing_then(void) {
+    TokenList *tokens = tokenizer_tokenize("if true; echo yes; fi");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NULL(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_if_missing_fi(void) {
+    TokenList *tokens = tokenizer_tokenize("if true; then echo yes");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NULL(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_nested_if(void) {
+    TokenList *tokens = tokenizer_tokenize(
+        "if true; then if false; then echo a; else echo b; fi; fi");
+    CommandList *list = parser_parse(tokens);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_IF);
+    IfCommand *outer = list->entries[0].if_cmd;
+    // Body of outer if contains an inner if
+    ASSERT_INT_EQ(outer->clauses[0].body->num_entries, 1);
+    ASSERT_INT_EQ(outer->clauses[0].body->entries[0].type, NODE_IF);
+    IfCommand *inner = outer->clauses[0].body->entries[0].if_cmd;
+    ASSERT_INT_EQ(inner->num_clauses, 1);
+    ASSERT_NOT_NULL(inner->else_body);
     command_list_free(list);
     token_list_free(tokens);
 }
@@ -461,6 +593,18 @@ int main(void) {
     test_parser_error_and_no_rhs();
     test_parser_error_or_no_rhs();
     test_parser_three_semicolons();
+
+    // if/elif/else/fi
+    test_parser_if_basic();
+    test_parser_if_else();
+    test_parser_if_elif_else();
+    test_parser_if_with_list();
+    test_parser_if_and_operator();
+    test_parser_if_compound_condition();
+    test_parser_if_multi_body();
+    test_parser_if_missing_then();
+    test_parser_if_missing_fi();
+    test_parser_nested_if();
 
     TEST_REPORT();
 }
