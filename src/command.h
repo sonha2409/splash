@@ -67,4 +67,32 @@ void pipeline_add_pipe_type(Pipeline *pl, PipeType type);
 // Free a Pipeline and all its commands.
 void pipeline_free(Pipeline *pl);
 
+// Operator connecting two pipelines in a command list.
+typedef enum {
+    LIST_SEMI,  // ;  — sequential, ignore exit code
+    LIST_AND,   // && — execute next only if previous succeeded
+    LIST_OR     // || — execute next only if previous failed
+} ListOpType;
+
+// A list of one or more pipelines connected by ;, &&, or ||.
+typedef struct {
+    Pipeline **pipelines;     // Array of pipeline pointers (owned)
+    ListOpType *operators;    // Array of operators between pipelines (count = num_pipelines - 1)
+    int num_pipelines;
+    int pipeline_capacity;
+} CommandList;
+
+// Creates a new empty CommandList. Caller takes ownership.
+CommandList *command_list_new(void);
+
+// Append a pipeline to the list. Ownership of pl is transferred to list.
+void command_list_add_pipeline(CommandList *list, Pipeline *pl);
+
+// Record the operator between the last two pipelines added.
+// Must be called after adding the second pipeline.
+void command_list_add_operator(CommandList *list, ListOpType op);
+
+// Free a CommandList and all its pipelines.
+void command_list_free(CommandList *list);
+
 #endif // SPLASH_COMMAND_H

@@ -689,6 +689,46 @@ static char *expand_aliases(const char *line) {
     return expanded;
 }
 
+int executor_execute_list(CommandList *list, const char *command_str) {
+    if (!list || list->num_pipelines == 0) {
+        return 0;
+    }
+
+    int status = 0;
+    for (int i = 0; i < list->num_pipelines; i++) {
+        // Check operator before this pipeline (skip for first)
+        if (i > 0) {
+            ListOpType op = list->operators[i - 1];
+            if (op == LIST_AND && status != 0) {
+                continue;  // skip: && requires previous success
+            }
+            if (op == LIST_OR && status == 0) {
+                continue;  // skip: || requires previous failure
+            }
+        }
+
+        Pipeline *pl = list->pipelines[i];
+
+        // Expand globs in all commands
+        for (int ci = 0; ci < pl->num_commands; ci++) {
+            expand_glob_argv(pl->commands[ci]);
+        }
+
+        // Track $_ (last argument of the command)
+        if (pl->num_commands > 0) {
+            SimpleCommand *last_cmd = pl->commands[pl->num_commands - 1];
+            if (last_cmd->argc > 0) {
+                expand_set_last_arg(last_cmd->argv[last_cmd->argc - 1]);
+            }
+        }
+
+        status = executor_execute(pl, command_str);
+        expand_set_last_status(status);
+    }
+
+    return status;
+}
+
 int executor_execute_line(const char *line) {
     if (!line || *line == '\0') {
         return 0;
@@ -708,24 +748,11 @@ int executor_execute_line(const char *line) {
     }
 
     TokenList *tokens = tokenizer_tokenize(effective);
-    Pipeline *pl = parser_parse(tokens);
+    CommandList *list = parser_parse(tokens);
     int status = 0;
-    if (pl) {
-        // Expand globs in all commands
-        for (int ci = 0; ci < pl->num_commands; ci++) {
-            expand_glob_argv(pl->commands[ci]);
-        }
-
-        // Track $_ (last argument of the command)
-        if (pl->num_commands > 0) {
-            SimpleCommand *last_cmd = pl->commands[pl->num_commands - 1];
-            if (last_cmd->argc > 0) {
-                expand_set_last_arg(last_cmd->argv[last_cmd->argc - 1]);
-            }
-        }
-        status = executor_execute(pl, effective);
-        expand_set_last_status(status);
-        pipeline_free(pl);
+    if (list) {
+        status = executor_execute_list(list, effective);
+        command_list_free(list);
     }
     token_list_free(tokens);
     free(expanded);

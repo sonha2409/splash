@@ -86,7 +86,52 @@ static SimpleCommand *parse_simple_command(Parser *p) {
     return cmd;
 }
 
-Pipeline *parser_parse(const TokenList *tokens) {
+// Return true if the token is a list separator (;, &&, ||).
+static int is_list_operator(TokenType type) {
+    return type == TOKEN_SEMICOLON ||
+           type == TOKEN_AND ||
+           type == TOKEN_OR;
+}
+
+// Parse a single pipeline: command (PIPE command)*
+// Returns NULL on error (with message printed).
+static Pipeline *parse_pipeline(Parser *p) {
+    SimpleCommand *cmd = parse_simple_command(p);
+    if (!cmd) {
+        return NULL;
+    }
+
+    Pipeline *pl = pipeline_new();
+    pipeline_add_command(pl, cmd);
+
+    // Parse remaining pipeline stages: (PIPE command)*
+    while (peek(p)->type == TOKEN_PIPE ||
+           peek(p)->type == TOKEN_PIPE_STRUCTURED) {
+        Token *pipe_tok = advance(p); // consume pipe
+        PipeType ptype = (pipe_tok->type == TOKEN_PIPE_STRUCTURED)
+                         ? PIPE_STRUCTURED : PIPE_TEXT;
+
+        cmd = parse_simple_command(p);
+        if (!cmd) {
+            fprintf(stderr, "splash: syntax error: expected command after '%s'\n",
+                    pipe_tok->value);
+            pipeline_free(pl);
+            return NULL;
+        }
+        pipeline_add_command(pl, cmd);
+        pipeline_add_pipe_type(pl, ptype);
+    }
+
+    // Check for background
+    if (peek(p)->type == TOKEN_BACKGROUND) {
+        pl->background = 1;
+        advance(p);
+    }
+
+    return pl;
+}
+
+CommandList *parser_parse(const TokenList *tokens) {
     if (!tokens || tokens->count == 0) {
         return NULL;
     }
@@ -108,11 +153,11 @@ Pipeline *parser_parse(const TokenList *tokens) {
         return NULL;
     }
 
-    // Parse first command
-    SimpleCommand *cmd = parse_simple_command(&p);
-    if (!cmd) {
-        // parse_simple_command prints errors for redirect-without-command.
-        // For other cases (leading pipe, semicolon, etc.), print a generic error.
+    // Parse first pipeline
+    Pipeline *pl = parse_pipeline(&p);
+    if (!pl) {
+        // parse_pipeline prints errors for most cases.
+        // For leading operators like ; or &&, print a generic error.
         TokenType t = peek(&p)->type;
         if (t != TOKEN_EOF && t != TOKEN_NEWLINE) {
             fprintf(stderr, "splash: syntax error: unexpected token '%s'\n",
@@ -121,36 +166,46 @@ Pipeline *parser_parse(const TokenList *tokens) {
         return NULL;
     }
 
-    Pipeline *pl = pipeline_new();
-    pipeline_add_command(pl, cmd);
+    CommandList *list = command_list_new();
+    command_list_add_pipeline(list, pl);
 
-    // Parse remaining pipeline stages: (PIPE command)*
-    while (peek(&p)->type == TOKEN_PIPE ||
-           peek(&p)->type == TOKEN_PIPE_STRUCTURED) {
-        Token *pipe_tok = advance(&p); // consume pipe
-        PipeType ptype = (pipe_tok->type == TOKEN_PIPE_STRUCTURED)
-                         ? PIPE_STRUCTURED : PIPE_TEXT;
+    // Parse remaining pipelines separated by ; && ||
+    while (is_list_operator(peek(&p)->type)) {
+        Token *op_tok = advance(&p);
+        ListOpType op;
+        if (op_tok->type == TOKEN_SEMICOLON) {
+            op = LIST_SEMI;
+        } else if (op_tok->type == TOKEN_AND) {
+            op = LIST_AND;
+        } else {
+            op = LIST_OR;
+        }
 
-        cmd = parse_simple_command(&p);
-        if (!cmd) {
+        // Skip newlines after operator (for multiline input)
+        while (peek(&p)->type == TOKEN_NEWLINE) {
+            advance(&p);
+        }
+
+        // Trailing semicolon is valid (no more commands)
+        if (op == LIST_SEMI &&
+            (peek(&p)->type == TOKEN_EOF || peek(&p)->type == TOKEN_NEWLINE)) {
+            break;
+        }
+
+        pl = parse_pipeline(&p);
+        if (!pl) {
             fprintf(stderr, "splash: syntax error: expected command after '%s'\n",
-                    pipe_tok->value);
-            pipeline_free(pl);
+                    op_tok->value);
+            command_list_free(list);
             return NULL;
         }
-        pipeline_add_command(pl, cmd);
-        pipeline_add_pipe_type(pl, ptype);
-    }
-
-    // Check for background
-    if (peek(&p)->type == TOKEN_BACKGROUND) {
-        pl->background = 1;
-        advance(&p);
+        command_list_add_pipeline(list, pl);
+        command_list_add_operator(list, op);
     }
 
     // Incomplete input — discard partial parse, no error
     if (peek(&p)->type == TOKEN_INCOMPLETE) {
-        pipeline_free(pl);
+        command_list_free(list);
         return NULL;
     }
 
@@ -159,9 +214,9 @@ Pipeline *parser_parse(const TokenList *tokens) {
     if (remaining != TOKEN_EOF && remaining != TOKEN_NEWLINE) {
         fprintf(stderr, "splash: syntax error: unexpected token '%s'\n",
                 peek(&p)->value);
-        pipeline_free(pl);
+        command_list_free(list);
         return NULL;
     }
 
-    return pl;
+    return list;
 }

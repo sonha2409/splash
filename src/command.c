@@ -103,3 +103,43 @@ void pipeline_free(Pipeline *pl) {
     free(pl->pipe_types);
     free(pl);
 }
+
+CommandList *command_list_new(void) {
+    CommandList *list = xmalloc(sizeof(CommandList));
+    list->pipeline_capacity = INITIAL_PIPELINE_CAPACITY;
+    list->pipelines = xmalloc(sizeof(Pipeline *) * (size_t)list->pipeline_capacity);
+    list->operators = xmalloc(sizeof(ListOpType) * (size_t)list->pipeline_capacity);
+    list->num_pipelines = 0;
+    return list;
+}
+
+void command_list_add_pipeline(CommandList *list, Pipeline *pl) {
+    if (list->num_pipelines >= list->pipeline_capacity) {
+        list->pipeline_capacity *= 2;
+        list->pipelines = xrealloc(list->pipelines,
+                                   sizeof(Pipeline *) * (size_t)list->pipeline_capacity);
+        list->operators = xrealloc(list->operators,
+                                   sizeof(ListOpType) * (size_t)list->pipeline_capacity);
+    }
+    list->pipelines[list->num_pipelines++] = pl;
+}
+
+void command_list_add_operator(CommandList *list, ListOpType op) {
+    int idx = list->num_pipelines - 2;
+    if (idx < 0) {
+        return;
+    }
+    list->operators[idx] = op;
+}
+
+void command_list_free(CommandList *list) {
+    if (!list) {
+        return;
+    }
+    for (int i = 0; i < list->num_pipelines; i++) {
+        pipeline_free(list->pipelines[i]);
+    }
+    free(list->pipelines);
+    free(list->operators);
+    free(list);
+}

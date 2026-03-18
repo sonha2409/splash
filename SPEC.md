@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-18
 **Current milestone**: Milestone 8 — Scripting (Progressive POSIX)
-**Last completed feature**: 7.16 to-csv/json
+**Last completed feature**: 8.1 Command lists
 
 ---
 
@@ -248,7 +248,7 @@ splash/
 
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
-| 8.1 | Command lists | `cmd1 ; cmd2` (sequential), `cmd1 && cmd2` (AND), `cmd1 \|\| cmd2` (OR) | `TODO` | | |
+| 8.1 | Command lists | `cmd1 ; cmd2` (sequential), `cmd1 && cmd2` (AND), `cmd1 \|\| cmd2` (OR) | `DONE` | 2026-03-18 | New CommandList AST node; parser returns CommandList* |
 | 8.2 | `if/elif/else/fi` | Conditional execution based on exit codes. | `TODO` | | |
 | 8.3 | `for` loop | `for var in word...; do commands; done` | `TODO` | | |
 | 8.4 | `while` / `until` | `while condition; do commands; done` | `TODO` | | |
