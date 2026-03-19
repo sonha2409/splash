@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -770,6 +771,58 @@ static int execute_while_command(WhileCommand *cmd,
     return status;
 }
 
+// Unescape glob sentinels (GLOB_STAR → *, GLOB_QUEST → ?) in a string.
+// Returns a newly allocated string. Caller must free.
+static char *unescape_glob_sentinels(const char *s) {
+    char *out = xmalloc(strlen(s) + 1);
+    char *p = out;
+    for (; *s; s++) {
+        if (*s == '\x01') {
+            *p++ = '*';
+        } else if (*s == '\x02') {
+            *p++ = '?';
+        } else {
+            *p++ = *s;
+        }
+    }
+    *p = '\0';
+    return out;
+}
+
+// Execute a case/in/esac command.
+// Matches the word against each clause's patterns using fnmatch().
+// Executes the first matching clause's body.
+// The tokenizer replaces unquoted * and ? with sentinel bytes (\x01, \x02)
+// for glob expansion. We unescape these back to real characters before
+// passing to fnmatch().
+static int execute_case_command(CaseCommand *cmd,
+                                const char *command_str __attribute__((unused))) {
+    char *word = unescape_glob_sentinels(cmd->word);
+
+    int status = 0;
+    for (int i = 0; i < cmd->num_clauses; i++) {
+        CaseClause *clause = &cmd->clauses[i];
+        int matched = 0;
+        for (int j = 0; j < clause->num_patterns; j++) {
+            char *pat = unescape_glob_sentinels(clause->patterns[j]);
+            if (fnmatch(pat, word, 0) == 0) {
+                matched = 1;
+            }
+            free(pat);
+            if (matched) {
+                break;
+            }
+        }
+        if (matched) {
+            status = executor_execute_line(clause->body_src);
+            break;
+        }
+    }
+
+    free(word);
+    return status;
+}
+
 // Execute a single node (pipeline or compound command).
 static int execute_node(Node *node, const char *command_str) {
     switch (node->type) {
@@ -781,6 +834,8 @@ static int execute_node(Node *node, const char *command_str) {
             return execute_for_command(node->for_cmd, command_str);
         case NODE_WHILE:
             return execute_while_command(node->while_cmd, command_str);
+        case NODE_CASE:
+            return execute_case_command(node->case_cmd, command_str);
     }
     return 0;
 }

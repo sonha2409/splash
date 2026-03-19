@@ -7,6 +7,7 @@ typedef struct CommandList CommandList;
 typedef struct IfCommand IfCommand;
 typedef struct ForCommand ForCommand;
 typedef struct WhileCommand WhileCommand;
+typedef struct CaseCommand CaseCommand;
 
 typedef enum {
     REDIRECT_OUTPUT,       // >   stdout to file (truncate)
@@ -87,6 +88,7 @@ typedef enum {
     NODE_IF,
     NODE_FOR,
     NODE_WHILE,
+    NODE_CASE,
 } NodeType;
 
 typedef struct {
@@ -96,6 +98,7 @@ typedef struct {
         IfCommand *if_cmd;     // NODE_IF (owned)
         ForCommand *for_cmd;   // NODE_FOR (owned)
         WhileCommand *while_cmd; // NODE_WHILE (owned)
+        CaseCommand *case_cmd;   // NODE_CASE (owned)
     };
 } Node;
 
@@ -124,6 +127,9 @@ void command_list_add_for(CommandList *list, ForCommand *for_cmd);
 
 // Append a while-command to the list. Ownership of while_cmd is transferred to list.
 void command_list_add_while(CommandList *list, WhileCommand *while_cmd);
+
+// Append a case-command to the list. Ownership of case_cmd is transferred to list.
+void command_list_add_case(CommandList *list, CaseCommand *case_cmd);
 
 // Record the operator between the last two entries added.
 // Must be called after adding the second entry.
@@ -172,6 +178,34 @@ struct WhileCommand {
     char *body_src;    // Raw body source text (re-evaluated each iteration, owned)
     int is_until;      // 0 = while, 1 = until
 };
+
+// One clause in a case statement: pattern list + body.
+typedef struct {
+    char **patterns;       // Array of pattern strings (owned)
+    int num_patterns;
+    int pattern_capacity;
+    char *body_src;        // Raw body source text (re-evaluated, owned)
+} CaseClause;
+
+// case word in pattern1) body ;; pattern2) body ;; esac
+struct CaseCommand {
+    char *word;            // The word to match against (owned)
+    CaseClause *clauses;   // Array of clauses (owned)
+    int num_clauses;
+    int clause_capacity;
+};
+
+// Creates a new CaseCommand. Caller takes ownership.
+CaseCommand *case_command_new(const char *word);
+
+// Add a pattern to the current (last) clause.
+void case_clause_add_pattern(CaseClause *clause, const char *pattern);
+
+// Start a new clause in the case command. Returns a pointer to the new clause.
+CaseClause *case_command_add_clause(CaseCommand *cmd);
+
+// Free a CaseCommand and all its data.
+void case_command_free(CaseCommand *cmd);
 
 // Creates a new WhileCommand. Caller takes ownership.
 WhileCommand *while_command_new(int is_until);

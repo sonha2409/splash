@@ -164,3 +164,49 @@ Both condition and body are full command lists. Like `for`, the body and conditi
 
 - **Unit tests** (8 new in `test_parser.c`): basic while, basic until, multi-body, with list ops, nested in if, error cases (missing do/done, empty condition)
 - **Manual tests** (9 cases): basic while, while false, until true, until body runs, nesting with if/for, multi-command body, error cases
+
+## 8.5 `case/esac`
+
+### Design
+
+```
+case word in
+  pattern1) commands ;;
+  pattern2|pattern3) commands ;;
+  *) commands ;;
+esac
+```
+
+Pattern matching using `fnmatch()` — supports `*`, `?`, and `[...]` glob patterns. Multiple patterns per clause separated by `|`. The `*` catch-all pattern works naturally.
+
+### Implementation
+
+**Tokenizer**: Added `TOKEN_DSEMI` (`;;`) token type. When the tokenizer sees `;`, it peeks at the next character — if also `;`, it emits a single `TOKEN_DSEMI` token instead of two `TOKEN_SEMICOLON` tokens.
+
+**New AST node**: `CaseCommand` with match word, array of `CaseClause` (each has patterns + raw body source). Added `NODE_CASE` to the `Node` tagged union.
+
+**Parser**: `parse_case_command()` consumes `case` → expects WORD → expects `in` → loops parsing clauses:
+- Collect patterns (WORD tokens separated by `TOKEN_PIPE`) until `TOKEN_RPAREN`
+- Parse body via `parse_command_list_until({"esac"})`, also stopping at `TOKEN_DSEMI`
+- Extract raw body source text
+- Consume `;;` or allow final clause without `;;` before `esac`
+
+`parse_command_list_until()` was updated to also stop at `TOKEN_DSEMI`, since `;;` terminates case clause bodies.
+
+**Executor**: `execute_case_command()` iterates clauses, matching each pattern against the word using `fnmatch(pattern, word, 0)`. The tokenizer replaces unquoted `*`/`?` with sentinel bytes (`\x01`/`\x02`) for glob expansion, so the executor unescapes these back to real characters before passing to `fnmatch()`.
+
+### Edge Cases
+
+- **Glob patterns**: `*.txt`, `?b`, `[a-z]*` all work via `fnmatch()`
+- **Multiple patterns**: `a|b|c)` — any match triggers the clause
+- **Catch-all**: `*)` matches anything (standard POSIX idiom)
+- **Last clause without `;;`**: Valid if followed by `; esac` or newline + `esac`
+- **No match**: Returns 0, no clause body executed
+- **Variable in word**: Expanded at tokenization time; works when variable is set before the line containing `case`
+- **Optional leading `(`**: `(pattern)` syntax is accepted (POSIX allows it)
+
+### Testing
+
+- **Unit tests** (9 new in `test_parser.c`): basic, multiple clauses, multi-pattern, with list ops, last without `;;`, nested in if, error cases (missing in/esac/rparen)
+- **Tokenizer tests** (1 new, 1 updated in `test_tokenizer.c`): `;;` tokenization, updated adjacent-operators test
+- **Manual tests** (7 cases): exact match, wildcard `*`, multi-pattern `|`, glob `*.txt`/`?`, no match, variable, last clause without `;;`

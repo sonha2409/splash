@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include "complete.h"
@@ -17,6 +18,7 @@
 static struct termios orig_termios;
 static int raw_mode_enabled = 0;
 static int is_interactive = 0;
+static int prev_extra_rows = 0;
 
 void editor_init(void) {
     if (!isatty(STDIN_FILENO)) {
@@ -74,6 +76,7 @@ static void leave_raw_mode(void) {
     }
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
     raw_mode_enabled = 0;
+    prev_extra_rows = 0;
 }
 
 void editor_cleanup(void) {
@@ -146,18 +149,41 @@ static void write_highlighted(const char *buf, size_t len,
     term_write("\x1b[0m", 4);
 }
 
+// Get terminal width in columns. Returns 80 as fallback.
+static int get_term_cols(void) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        return ws.ws_col;
+    }
+    return 80;
+}
+
 // Refresh the line display: rewrite prompt + buffer from column 0.
 // If suggestion is non-NULL, the suffix after buf is shown in grey.
 static void refresh_line(const char *prompt, const char *buf, size_t len,
                          size_t pos, const char *suggestion) {
     char seq[64];
     int n;
+    int cols = get_term_cols();
+    size_t prompt_len = strlen(prompt);
 
-    // Carriage return
+    // Calculate how many rows the previous content spanned.
+    // Move cursor up to the prompt line.
+    if (prev_extra_rows > 0) {
+        n = snprintf(seq, sizeof(seq), "\x1b[%dA", prev_extra_rows);
+        if (n > 0 && (size_t)n < sizeof(seq)) {
+            term_write(seq, (size_t)n);
+        }
+    }
+
+    // Move to column 0
     term_write("\r", 1);
 
+    // Erase from cursor to end of screen (clears all old content)
+    term_write("\x1b[0J", 4);
+
     // Write prompt
-    term_write(prompt, strlen(prompt));
+    term_write(prompt, prompt_len);
 
     // Write buffer with syntax highlighting
     if (len > 0) {
@@ -170,25 +196,48 @@ static void refresh_line(const char *prompt, const char *buf, size_t len,
         }
     }
 
+    // Calculate total visible length so far (prompt + buffer)
+    size_t total_len = prompt_len + len;
+
     // Write suggestion suffix in dim grey
+    size_t sug_extra = 0;
     if (suggestion) {
         size_t slen = strlen(suggestion);
         if (slen > len) {
+            sug_extra = slen - len;
             term_write("\x1b[2;37m", 7);
-            term_write(suggestion + len, slen - len);
+            term_write(suggestion + len, sug_extra);
             term_write("\x1b[0m", 4);
         }
     }
 
-    // Erase to end of line
-    term_write("\x1b[0K", 4);
+    // Calculate how many rows the current content spans
+    size_t content_len = total_len + sug_extra;
+    int total_rows = (content_len == 0) ? 0 : (int)((content_len - 1) / (size_t)cols);
 
-    // Move cursor to correct position
-    // Cursor should be at prompt_len + pos
-    n = snprintf(seq, sizeof(seq), "\r\x1b[%zuC", strlen(prompt) + pos);
+    // Calculate which row the cursor should be on
+    size_t cursor_col = prompt_len + pos;
+    int cursor_row = (cursor_col == 0) ? 0 : (int)((cursor_col - 1) / (size_t)cols);
+
+    // Move cursor from end of content to cursor position
+    // First move up from last row to cursor row
+    int rows_up = total_rows - cursor_row;
+    if (rows_up > 0) {
+        n = snprintf(seq, sizeof(seq), "\x1b[%dA", rows_up);
+        if (n > 0 && (size_t)n < sizeof(seq)) {
+            term_write(seq, (size_t)n);
+        }
+    }
+
+    // Move to correct column
+    int target_col = (int)(cursor_col % (size_t)cols);
+    n = snprintf(seq, sizeof(seq), "\r\x1b[%dC", target_col);
     if (n > 0 && (size_t)n < sizeof(seq)) {
         term_write(seq, (size_t)n);
     }
+
+    // Remember how many extra rows below the first line for next refresh
+    prev_extra_rows = total_rows;
 }
 
 // Non-interactive fallback: read a line with fgets().

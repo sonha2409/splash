@@ -225,10 +225,26 @@ static void test_tokenizer_whitespace_variations(void) {
 
 static void test_tokenizer_adjacent_operators(void) {
     TokenList *list = tokenizer_tokenize(";;&");
-    ASSERT_INT_EQ(list->count, 4); // ;, ;, &, EOF
-    ASSERT_INT_EQ(list->tokens[0].type, TOKEN_SEMICOLON);
+    ASSERT_INT_EQ(list->count, 3); // ;;, &, EOF
+    ASSERT_INT_EQ(list->tokens[0].type, TOKEN_DSEMI);
+    ASSERT_INT_EQ(list->tokens[1].type, TOKEN_BACKGROUND);
+    token_list_free(list);
+}
+
+static void test_tokenizer_double_semicolon(void) {
+    TokenList *list = tokenizer_tokenize("echo a;; echo b");
+    // echo a ;; echo b EOF
+    ASSERT_INT_EQ(list->tokens[0].type, TOKEN_WORD);
+    ASSERT_INT_EQ(list->tokens[1].type, TOKEN_WORD);
+    ASSERT_INT_EQ(list->tokens[2].type, TOKEN_DSEMI);
+    ASSERT_STR_EQ(list->tokens[2].value, ";;");
+    ASSERT_INT_EQ(list->tokens[3].type, TOKEN_WORD);
+    token_list_free(list);
+
+    // ;; vs ; ;
+    list = tokenizer_tokenize("a ; ; b");
     ASSERT_INT_EQ(list->tokens[1].type, TOKEN_SEMICOLON);
-    ASSERT_INT_EQ(list->tokens[2].type, TOKEN_BACKGROUND);
+    ASSERT_INT_EQ(list->tokens[2].type, TOKEN_SEMICOLON);
     token_list_free(list);
 }
 
@@ -260,6 +276,7 @@ int main(void) {
     test_tokenizer_position_tracking();
     test_tokenizer_whitespace_variations();
     test_tokenizer_adjacent_operators();
+    test_tokenizer_double_semicolon();
 
     TEST_REPORT();
 }

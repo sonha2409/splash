@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-18
 **Current milestone**: Milestone 8 — Scripting (Progressive POSIX)
-**Last completed feature**: 8.4 while/until loops
+**Last completed feature**: 8.5 case/esac
 
 ---
 
@@ -252,7 +252,7 @@ splash/
 | 8.2 | `if/elif/else/fi` | Conditional execution based on exit codes. | `DONE` | 2026-03-18 | CommandList refactored to Node-based entries for compound commands |
 | 8.3 | `for` loop | `for var in word...; do commands; done` | `DONE` | 2026-03-18 | Raw body re-evaluation for $var expansion; glob on word list |
 | 8.4 | `while` / `until` | `while condition; do commands; done` | `DONE` | 2026-03-18 | Unified WhileCommand struct with is_until flag; raw source re-evaluation like for |
-| 8.5 | `case/esac` | `case word in pattern) commands;; ... esac` | `TODO` | | |
+| 8.5 | `case/esac` | `case word in pattern) commands;; ... esac` | `DONE` | 2026-03-19 | TOKEN_DSEMI for ;;; fnmatch() for glob patterns; sentinel unescape |
 | 8.6 | Functions | `fname() { commands; }`. Store in function table. Execute in current shell context. | `TODO` | | |
 | 8.7 | `local` variables | Local variable scope in functions. | `TODO` | | |
 | 8.8 | `return` | Return from functions with exit code. | `TODO` | | |

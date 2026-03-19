@@ -77,7 +77,8 @@ static int is_compound_keyword(Parser *p) {
     return strcmp(peek(p)->value, "if") == 0 ||
            strcmp(peek(p)->value, "for") == 0 ||
            strcmp(peek(p)->value, "while") == 0 ||
-           strcmp(peek(p)->value, "until") == 0;
+           strcmp(peek(p)->value, "until") == 0 ||
+           strcmp(peek(p)->value, "case") == 0;
 }
 
 // Forward declarations for mutual recursion.
@@ -86,6 +87,7 @@ static CommandList *parse_command_list_until(Parser *p, const char **stops,
 static IfCommand *parse_if_command(Parser *p);
 static ForCommand *parse_for_command(Parser *p);
 static WhileCommand *parse_while_command(Parser *p, int is_until);
+static CaseCommand *parse_case_command(Parser *p);
 
 // Parse a simple command: mix of WORD tokens and redirections.
 // Grammar: command = (WORD | redirection)+
@@ -184,6 +186,9 @@ static Node parse_entry(Parser *p) {
         } else if (strcmp(peek(p)->value, "until") == 0) {
             node.type = NODE_WHILE;
             node.while_cmd = parse_while_command(p, 1);
+        } else if (strcmp(peek(p)->value, "case") == 0) {
+            node.type = NODE_CASE;
+            node.case_cmd = parse_case_command(p);
         } else {
             node.type = NODE_PIPELINE;
             node.pipeline = NULL;
@@ -202,6 +207,7 @@ static int node_is_error(Node *n) {
         case NODE_IF:       return n->if_cmd == NULL;
         case NODE_FOR:      return n->for_cmd == NULL;
         case NODE_WHILE:    return n->while_cmd == NULL;
+        case NODE_CASE:     return n->case_cmd == NULL;
     }
     return 1;
 }
@@ -220,6 +226,9 @@ static void command_list_add_node(CommandList *list, Node *node) {
             break;
         case NODE_WHILE:
             command_list_add_while(list, node->while_cmd);
+            break;
+        case NODE_CASE:
+            command_list_add_case(list, node->case_cmd);
             break;
     }
 }
@@ -245,7 +254,8 @@ static CommandList *parse_command_list_until(Parser *p, const char **stops,
     // Check for immediate stop word or end of input
     if (is_stop_word(p, stops, num_stops) ||
         peek(p)->type == TOKEN_EOF ||
-        peek(p)->type == TOKEN_INCOMPLETE) {
+        peek(p)->type == TOKEN_INCOMPLETE ||
+        peek(p)->type == TOKEN_DSEMI) {
         // Empty command list
         return command_list_new();
     }
@@ -279,6 +289,7 @@ static CommandList *parse_command_list_until(Parser *p, const char **stops,
             if (peek(p)->type == TOKEN_EOF ||
                 peek(p)->type == TOKEN_NEWLINE ||
                 peek(p)->type == TOKEN_INCOMPLETE ||
+                peek(p)->type == TOKEN_DSEMI ||
                 is_stop_word(p, stops, num_stops)) {
                 break;
             }
@@ -464,6 +475,136 @@ static WhileCommand *parse_while_command(Parser *p, int is_until) {
     WhileCommand *cmd = while_command_new(is_until);
     cmd->cond_src = cond_src;
     cmd->body_src = body_src;
+    return cmd;
+}
+
+// Parse a case/in/esac compound command.
+// Assumes the current token is the WORD "case".
+// Grammar: case WORD in (PATTERN (| PATTERN)*) ) command_list ;; ... esac
+static CaseCommand *parse_case_command(Parser *p) {
+    advance(p); // consume "case"
+
+    // Expect the match word
+    if (peek(p)->type != TOKEN_WORD) {
+        fprintf(stderr, "splash: syntax error: expected word after 'case'\n");
+        return NULL;
+    }
+    Token *word_tok = advance(p);
+    CaseCommand *cmd = case_command_new(word_tok->value);
+
+    // Skip newlines
+    while (peek(p)->type == TOKEN_NEWLINE) {
+        advance(p);
+    }
+
+    // Expect "in"
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "in") != 0) {
+        fprintf(stderr, "splash: syntax error: expected 'in' after 'case %s'\n",
+                cmd->word);
+        case_command_free(cmd);
+        return NULL;
+    }
+    advance(p); // consume "in"
+
+    // Parse clauses until "esac"
+    while (1) {
+        // Skip newlines/semicolons between clauses
+        while (peek(p)->type == TOKEN_NEWLINE ||
+               peek(p)->type == TOKEN_DSEMI) {
+            advance(p);
+        }
+
+        // Check for "esac" or end of input
+        if (peek(p)->type == TOKEN_EOF || peek(p)->type == TOKEN_INCOMPLETE) {
+            fprintf(stderr, "splash: syntax error: expected 'esac'\n");
+            case_command_free(cmd);
+            return NULL;
+        }
+        if (peek(p)->type == TOKEN_WORD && strcmp(peek(p)->value, "esac") == 0) {
+            break;
+        }
+
+        // Parse pattern list: PATTERN (| PATTERN)* )
+        // Optional leading ( before patterns (POSIX allows it)
+        if (peek(p)->type == TOKEN_LPAREN) {
+            advance(p); // consume optional (
+        }
+
+        CaseClause *clause = case_command_add_clause(cmd);
+
+        // First pattern
+        if (peek(p)->type != TOKEN_WORD) {
+            fprintf(stderr, "splash: syntax error: expected pattern in 'case'\n");
+            case_command_free(cmd);
+            return NULL;
+        }
+        Token *pat = advance(p);
+        case_clause_add_pattern(clause, pat->value);
+
+        // Additional patterns separated by |
+        while (peek(p)->type == TOKEN_PIPE) {
+            advance(p); // consume |
+            if (peek(p)->type != TOKEN_WORD) {
+                fprintf(stderr,
+                        "splash: syntax error: expected pattern after '|'\n");
+                case_command_free(cmd);
+                return NULL;
+            }
+            pat = advance(p);
+            case_clause_add_pattern(clause, pat->value);
+        }
+
+        // Expect )
+        if (peek(p)->type != TOKEN_RPAREN) {
+            fprintf(stderr, "splash: syntax error: expected ')' after pattern\n");
+            case_command_free(cmd);
+            return NULL;
+        }
+        advance(p); // consume )
+
+        // Parse body — extract raw source text
+        int body_start_pos = peek(p)->pos;
+
+        const char *esac_stops[] = {"esac"};
+        CommandList *body_ast = parse_command_list_until(p, esac_stops, 1);
+        if (!body_ast) {
+            case_command_free(cmd);
+            return NULL;
+        }
+
+        int body_end_pos = peek(p)->pos;
+        if (p->input && body_end_pos > body_start_pos) {
+            int len = body_end_pos - body_start_pos;
+            clause->body_src = xmalloc((size_t)len + 1);
+            memcpy(clause->body_src, p->input + body_start_pos, (size_t)len);
+            clause->body_src[len] = '\0';
+        } else {
+            clause->body_src = xstrdup("");
+        }
+        command_list_free(body_ast);
+
+        // After body: expect ;; or esac
+        if (peek(p)->type == TOKEN_DSEMI) {
+            advance(p); // consume ;;
+        } else if (peek(p)->type == TOKEN_WORD &&
+                   strcmp(peek(p)->value, "esac") == 0) {
+            // Last clause without ;; — valid
+        } else if (peek(p)->type == TOKEN_EOF ||
+                   peek(p)->type == TOKEN_INCOMPLETE) {
+            fprintf(stderr, "splash: syntax error: expected ';;' or 'esac'\n");
+            case_command_free(cmd);
+            return NULL;
+        }
+    }
+
+    // Expect "esac"
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "esac") != 0) {
+        fprintf(stderr, "splash: syntax error: expected 'esac'\n");
+        case_command_free(cmd);
+        return NULL;
+    }
+    advance(p); // consume "esac"
+
     return cmd;
 }
 

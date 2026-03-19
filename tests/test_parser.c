@@ -720,6 +720,106 @@ static void test_parser_while_empty_condition(void) {
     token_list_free(tokens);
 }
 
+static void test_parser_case_basic(void) {
+    const char *input = "case hello in hello) echo matched;; esac";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->num_entries, 1);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_CASE);
+    CaseCommand *cmd = list->entries[0].case_cmd;
+    ASSERT_NOT_NULL(cmd);
+    ASSERT_STR_EQ(cmd->word, "hello");
+    ASSERT_INT_EQ(cmd->num_clauses, 1);
+    ASSERT_INT_EQ(cmd->clauses[0].num_patterns, 1);
+    ASSERT_STR_EQ(cmd->clauses[0].patterns[0], "hello");
+    ASSERT_NOT_NULL(cmd->clauses[0].body_src);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_case_multiple_clauses(void) {
+    const char *input = "case x in a) echo a;; b) echo b;; esac";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    CaseCommand *cmd = list->entries[0].case_cmd;
+    ASSERT_INT_EQ(cmd->num_clauses, 2);
+    ASSERT_STR_EQ(cmd->clauses[0].patterns[0], "a");
+    ASSERT_STR_EQ(cmd->clauses[1].patterns[0], "b");
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_case_multi_pattern(void) {
+    const char *input = "case x in a|b|c) echo abc;; esac";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    CaseCommand *cmd = list->entries[0].case_cmd;
+    ASSERT_INT_EQ(cmd->clauses[0].num_patterns, 3);
+    ASSERT_STR_EQ(cmd->clauses[0].patterns[0], "a");
+    ASSERT_STR_EQ(cmd->clauses[0].patterns[1], "b");
+    ASSERT_STR_EQ(cmd->clauses[0].patterns[2], "c");
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_case_with_list(void) {
+    TokenList *tokens = tokenizer_tokenize("case x in a) echo a;; esac ; echo end");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->num_entries, 2);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_CASE);
+    ASSERT_INT_EQ(list->entries[1].type, NODE_PIPELINE);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_case_last_without_dsemi(void) {
+    const char *input = "case x in x) echo last; esac";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    CaseCommand *cmd = list->entries[0].case_cmd;
+    ASSERT_INT_EQ(cmd->num_clauses, 1);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_case_missing_in(void) {
+    TokenList *tokens = tokenizer_tokenize("case x a) echo bad;; esac");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NULL(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_case_missing_esac(void) {
+    TokenList *tokens = tokenizer_tokenize("case x in a) echo bad;;");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NULL(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_case_missing_rparen(void) {
+    TokenList *tokens = tokenizer_tokenize("case x in a echo bad;; esac");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NULL(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_case_nested_in_if(void) {
+    TokenList *tokens = tokenizer_tokenize(
+        "if true; then case a in a) echo ok;; esac; fi");
+    CommandList *list = parser_parse(tokens, NULL);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_IF);
+    IfCommand *ic = list->entries[0].if_cmd;
+    ASSERT_INT_EQ(ic->clauses[0].body->entries[0].type, NODE_CASE);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
 int main(void) {
     printf("test_parser\n");
 
@@ -799,6 +899,17 @@ int main(void) {
     test_parser_while_missing_done();
     test_parser_while_nested_in_if();
     test_parser_while_empty_condition();
+
+    // case/esac
+    test_parser_case_basic();
+    test_parser_case_multiple_clauses();
+    test_parser_case_multi_pattern();
+    test_parser_case_with_list();
+    test_parser_case_last_without_dsemi();
+    test_parser_case_missing_in();
+    test_parser_case_missing_esac();
+    test_parser_case_missing_rparen();
+    test_parser_case_nested_in_if();
 
     TEST_REPORT();
 }

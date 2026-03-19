@@ -13,6 +13,7 @@ typedef enum {
     TOKEN_REDIRECT_APPEND_ERR, // >>&
     TOKEN_BACKGROUND,        // &
     TOKEN_SEMICOLON,         // ;
+    TOKEN_DSEMI,             // ;;
     TOKEN_AND,               // &&
     TOKEN_OR,                // ||
     TOKEN_LPAREN,            // (

@@ -522,10 +522,15 @@ TokenList *tokenizer_tokenize(const char *input) {
             continue;
         }
 
-        // Semicolon
+        // Semicolon / double-semicolon
         if (input[i] == ';') {
-            token_list_append(list, TOKEN_SEMICOLON, ";", i, 1);
-            i++;
+            if (input[i + 1] == ';') {
+                token_list_append(list, TOKEN_DSEMI, ";;", i, 2);
+                i += 2;
+            } else {
+                token_list_append(list, TOKEN_SEMICOLON, ";", i, 1);
+                i++;
+            }
             continue;
         }
 
@@ -596,6 +601,7 @@ const char *token_type_name(TokenType type) {
     case TOKEN_REDIRECT_APPEND_ERR: return "REDIRECT_APPEND_ERR";
     case TOKEN_BACKGROUND:        return "BACKGROUND";
     case TOKEN_SEMICOLON:         return "SEMICOLON";
+    case TOKEN_DSEMI:             return "DSEMI";
     case TOKEN_AND:               return "AND";
     case TOKEN_OR:                return "OR";
     case TOKEN_LPAREN:            return "LPAREN";

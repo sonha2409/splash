@@ -121,6 +121,9 @@ void node_free(Node *node) {
         case NODE_WHILE:
             while_command_free(node->while_cmd);
             break;
+        case NODE_CASE:
+            case_command_free(node->case_cmd);
+            break;
     }
 }
 
@@ -162,6 +165,13 @@ void command_list_add_while(CommandList *list, WhileCommand *while_cmd) {
     command_list_grow(list);
     list->entries[list->num_entries].type = NODE_WHILE;
     list->entries[list->num_entries].while_cmd = while_cmd;
+    list->num_entries++;
+}
+
+void command_list_add_case(CommandList *list, CaseCommand *case_cmd) {
+    command_list_grow(list);
+    list->entries[list->num_entries].type = NODE_CASE;
+    list->entries[list->num_entries].case_cmd = case_cmd;
     list->num_entries++;
 }
 
@@ -221,6 +231,55 @@ void for_command_free(ForCommand *cmd) {
     }
     free(cmd->words);
     free(cmd->body_src);
+    free(cmd);
+}
+
+CaseCommand *case_command_new(const char *word) {
+    CaseCommand *cmd = xmalloc(sizeof(CaseCommand));
+    cmd->word = xstrdup(word);
+    cmd->clause_capacity = INITIAL_CAPACITY;
+    cmd->clauses = xmalloc(sizeof(CaseClause) * (size_t)cmd->clause_capacity);
+    cmd->num_clauses = 0;
+    return cmd;
+}
+
+CaseClause *case_command_add_clause(CaseCommand *cmd) {
+    if (cmd->num_clauses >= cmd->clause_capacity) {
+        cmd->clause_capacity *= 2;
+        cmd->clauses = xrealloc(cmd->clauses,
+                                sizeof(CaseClause) * (size_t)cmd->clause_capacity);
+    }
+    CaseClause *clause = &cmd->clauses[cmd->num_clauses++];
+    clause->pattern_capacity = INITIAL_CAPACITY;
+    clause->patterns = xmalloc(sizeof(char *) * (size_t)clause->pattern_capacity);
+    clause->num_patterns = 0;
+    clause->body_src = NULL;
+    return clause;
+}
+
+void case_clause_add_pattern(CaseClause *clause, const char *pattern) {
+    if (clause->num_patterns >= clause->pattern_capacity) {
+        clause->pattern_capacity *= 2;
+        clause->patterns = xrealloc(clause->patterns,
+                                    sizeof(char *) * (size_t)clause->pattern_capacity);
+    }
+    clause->patterns[clause->num_patterns++] = xstrdup(pattern);
+}
+
+void case_command_free(CaseCommand *cmd) {
+    if (!cmd) {
+        return;
+    }
+    free(cmd->word);
+    for (int i = 0; i < cmd->num_clauses; i++) {
+        CaseClause *c = &cmd->clauses[i];
+        for (int j = 0; j < c->num_patterns; j++) {
+            free(c->patterns[j]);
+        }
+        free(c->patterns);
+        free(c->body_src);
+    }
+    free(cmd->clauses);
     free(cmd);
 }
 
