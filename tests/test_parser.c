@@ -820,6 +820,54 @@ static void test_parser_case_nested_in_if(void) {
     token_list_free(tokens);
 }
 
+// --- Function definition tests ---
+
+static void test_parser_function_basic(void) {
+    const char *input = "greet() { echo hello; }";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->num_entries, 1);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_FUNCTION_DEF);
+    FunctionDef *def = list->entries[0].func_def;
+    ASSERT_NOT_NULL(def);
+    ASSERT_STR_EQ(def->name, "greet");
+    ASSERT_NOT_NULL(def->body_src);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_function_with_list(void) {
+    const char *input = "f() { echo a; echo b; }; f";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->num_entries, 2);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_FUNCTION_DEF);
+    ASSERT_INT_EQ(list->entries[1].type, NODE_PIPELINE);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_function_not_keyword(void) {
+    // "if" should still parse as if-command, not function
+    const char *input = "if true; then echo yes; fi";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NOT_NULL(list);
+    ASSERT_INT_EQ(list->entries[0].type, NODE_IF);
+    command_list_free(list);
+    token_list_free(tokens);
+}
+
+static void test_parser_function_missing_brace(void) {
+    const char *input = "f() echo hello";
+    TokenList *tokens = tokenizer_tokenize(input);
+    CommandList *list = parser_parse(tokens, input);
+    ASSERT_NULL(list);
+    token_list_free(tokens);
+}
+
 int main(void) {
     printf("test_parser\n");
 
@@ -910,6 +958,12 @@ int main(void) {
     test_parser_case_missing_esac();
     test_parser_case_missing_rparen();
     test_parser_case_nested_in_if();
+
+    // functions
+    test_parser_function_basic();
+    test_parser_function_with_list();
+    test_parser_function_not_keyword();
+    test_parser_function_missing_brace();
 
     TEST_REPORT();
 }

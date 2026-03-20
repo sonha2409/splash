@@ -13,6 +13,7 @@
 #include "command.h"
 #include "executor.h"
 #include "expand.h"
+#include "functions.h"
 #include "jobs.h"
 #include "parser.h"
 #include "pipeline.h"
@@ -588,8 +589,10 @@ int executor_execute(Pipeline *pl, const char *command_str) {
     }
 
     // Single structured builtin: build stage and drain to stdout
+    // (skip if there's a user-defined function with the same name)
     if (pl->num_commands == 1 && !pl->background &&
-        builtin_is_structured(pl->commands[0]->argv[0])) {
+        builtin_is_structured(pl->commands[0]->argv[0]) &&
+        !functions_lookup(pl->commands[0]->argv[0])) {
         SimpleCommand *cmd = pl->commands[0];
 
         // For from-* sources, apply redirections so they can read from
@@ -636,6 +639,20 @@ int executor_execute(Pipeline *pl, const char *command_str) {
         SimpleCommand *cmd = pl->commands[0];
         if (builtin_is_builtin(cmd->argv[0])) {
             return builtin_execute(cmd);
+        }
+    }
+
+    // Check for shell functions (single command, non-pipeline only)
+    if (pl->num_commands == 1 && !pl->background) {
+        SimpleCommand *cmd = pl->commands[0];
+        const char *func_body = functions_lookup(cmd->argv[0]);
+        if (func_body) {
+            // Push positional parameters ($1..$N, $#, $@, $*)
+            expand_push_params(cmd->argc - 1,
+                               (const char **)(cmd->argv + 1));
+            int status = executor_execute_line(func_body);
+            expand_pop_params();
+            return status;
         }
     }
 
@@ -836,6 +853,10 @@ static int execute_node(Node *node, const char *command_str) {
             return execute_while_command(node->while_cmd, command_str);
         case NODE_CASE:
             return execute_case_command(node->case_cmd, command_str);
+        case NODE_FUNCTION_DEF:
+            // Register the function — no execution, just definition
+            functions_define(node->func_def->name, node->func_def->body_src);
+            return 0;
     }
     return 0;
 }

@@ -210,3 +210,54 @@ Pattern matching using `fnmatch()` — supports `*`, `?`, and `[...]` glob patte
 - **Unit tests** (9 new in `test_parser.c`): basic, multiple clauses, multi-pattern, with list ops, last without `;;`, nested in if, error cases (missing in/esac/rparen)
 - **Tokenizer tests** (1 new, 1 updated in `test_tokenizer.c`): `;;` tokenization, updated adjacent-operators test
 - **Manual tests** (7 cases): exact match, wildcard `*`, multi-pattern `|`, glob `*.txt`/`?`, no match, variable, last clause without `;;`
+
+## 8.6 Functions
+
+### Design
+
+```
+fname() { commands; }
+```
+
+Shell functions: define by name, store body text, execute in the current shell context with positional parameters. Functions are checked after builtins but before external commands, and shadow structured builtins if they share a name.
+
+### Implementation
+
+**New module**: `functions.c/h` — a simple dynamic array mapping function names to body source strings.
+- `functions_define(name, body_src)` — store or replace a definition
+- `functions_lookup(name)` — returns body source or NULL
+- `functions_unset(name)` — remove a definition
+- `functions_free_all()` — cleanup at exit
+
+**New AST node**: `FunctionDef` in `command.h` with `name` and `body_src` (raw body text). Added `NODE_FUNCTION_DEF` to the `Node` tagged union.
+
+**Parser**: `parse_entry()` checks for function definition syntax (`WORD LPAREN RPAREN`) via `is_function_def()` lookahead before checking compound keywords. `parse_function_def()` consumes `name ( ) {`, parses the body via `parse_command_list_until({"}"})`, extracts raw source text, and expects `}`. `{` and `}` are treated as regular WORD tokens by the tokenizer, detected in context by the parser.
+
+**Executor**: `execute_node()` handles `NODE_FUNCTION_DEF` by calling `functions_define()`. In `executor_execute()`, after the builtin check, `functions_lookup(argv[0])` is checked. If a function is found, positional parameters are pushed, the body is executed via `executor_execute_line()`, and parameters are popped.
+
+**Positional parameters**: `expand.c` now has a stack of parameter frames (`ParamFrame`). `expand_push_params()` pushes a new frame when a function is called; `expand_pop_params()` restores the caller's frame. This supports nested and recursive function calls with proper parameter isolation.
+
+**Tokenizer**: Extended `read_and_expand_var()` to handle `$0`-`$9`, `$#`, `$@`, `$*` as single-character specials (previously only `$?`, `$$`, `$!`, `$_` were handled). Multi-digit positional parameters (`${10}`, `${11}`, ...) work via the `${VAR}` form.
+
+**`expand_variable()`** updated to handle:
+- `$0` → `"splash"` (shell name)
+- `$1`-`$9` → positional parameters from current frame
+- Multi-digit via `${N}` → positional parameters by index
+- `$#` → count of parameters
+- `$@`, `$*` → space-joined parameters
+
+### Edge Cases
+
+- **Function shadows structured builtin**: `count()` overrides the `count` structured filter — `executor_execute()` skips the structured builtin path when a function with the same name exists
+- **Recursive functions**: Work naturally through `executor_execute_line()` re-entrance; each call pushes its own parameter frame
+- **Function redefinition**: Overwrites previous definition
+- **Nested calls**: `outer()` calling `inner()` — each has isolated parameters via the frame stack
+- **No args**: `$#` is 0, `$1`-`$9` expand to empty string, `$@`/`$*` expand to empty
+- **Missing `{`**: Produces `splash: syntax error: expected '{' in function 'name'`
+- **Keywords not treated as functions**: `if`, `for`, etc. are checked first by `is_compound_keyword()`
+- **Word splitting on `$@`**: Currently `$@` expands to a single token during tokenization (full word splitting is not yet implemented)
+
+### Testing
+
+- **Unit tests** (4 new in `test_parser.c`): basic function def, function with list, keyword not parsed as function, missing brace error
+- **Integration tests** (16 new in `test_m8_functions.sh`): basic call, multiple commands, `$1`-`$2`, `$#`, `$@`, `$*`, `${1}` braced, redefinition, nested calls, parameter isolation, recursion, if in function, for in function, `$0`

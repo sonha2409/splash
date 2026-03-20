@@ -8,6 +8,7 @@ typedef struct IfCommand IfCommand;
 typedef struct ForCommand ForCommand;
 typedef struct WhileCommand WhileCommand;
 typedef struct CaseCommand CaseCommand;
+typedef struct FunctionDef FunctionDef;
 
 typedef enum {
     REDIRECT_OUTPUT,       // >   stdout to file (truncate)
@@ -89,6 +90,7 @@ typedef enum {
     NODE_FOR,
     NODE_WHILE,
     NODE_CASE,
+    NODE_FUNCTION_DEF,
 } NodeType;
 
 typedef struct {
@@ -99,6 +101,7 @@ typedef struct {
         ForCommand *for_cmd;   // NODE_FOR (owned)
         WhileCommand *while_cmd; // NODE_WHILE (owned)
         CaseCommand *case_cmd;   // NODE_CASE (owned)
+        FunctionDef *func_def;   // NODE_FUNCTION_DEF (owned)
     };
 } Node;
 
@@ -206,6 +209,21 @@ CaseClause *case_command_add_clause(CaseCommand *cmd);
 
 // Free a CaseCommand and all its data.
 void case_command_free(CaseCommand *cmd);
+
+// fname() { body; } — shell function definition.
+struct FunctionDef {
+    char *name;        // Function name (owned)
+    char *body_src;    // Raw body source text (owned)
+};
+
+// Creates a new FunctionDef. Caller takes ownership.
+FunctionDef *function_def_new(const char *name);
+
+// Free a FunctionDef and all its data.
+void function_def_free(FunctionDef *def);
+
+// Append a function def to the command list. Ownership transferred.
+void command_list_add_function_def(CommandList *list, FunctionDef *def);
 
 // Creates a new WhileCommand. Caller takes ownership.
 WhileCommand *while_command_new(int is_until);

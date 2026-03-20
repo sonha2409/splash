@@ -88,6 +88,7 @@ static IfCommand *parse_if_command(Parser *p);
 static ForCommand *parse_for_command(Parser *p);
 static WhileCommand *parse_while_command(Parser *p, int is_until);
 static CaseCommand *parse_case_command(Parser *p);
+static FunctionDef *parse_function_def(Parser *p);
 
 // Parse a simple command: mix of WORD tokens and redirections.
 // Grammar: command = (WORD | redirection)+
@@ -168,11 +169,89 @@ static Pipeline *parse_pipeline(Parser *p) {
     return pl;
 }
 
+// Check if current position looks like a function definition: NAME ( ) {
+static int is_function_def(Parser *p) {
+    if (peek(p)->type != TOKEN_WORD) {
+        return 0;
+    }
+    // Must not be a reserved keyword
+    if (is_compound_keyword(p)) {
+        return 0;
+    }
+    // Look ahead: WORD LPAREN RPAREN
+    int saved = p->pos;
+    int found = 0;
+    if (p->tokens->tokens[saved + 1].type == TOKEN_LPAREN &&
+        p->tokens->tokens[saved + 2].type == TOKEN_RPAREN) {
+        found = 1;
+    }
+    return found;
+}
+
+// Parse a function definition: NAME () { body }
+// Assumes is_function_def() returned true.
+static FunctionDef *parse_function_def(Parser *p) {
+    Token *name_tok = advance(p); // consume function name
+    advance(p); // consume (
+    advance(p); // consume )
+
+    // Skip newlines between ) and {
+    while (peek(p)->type == TOKEN_NEWLINE) {
+        advance(p);
+    }
+
+    // Expect {
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "{") != 0) {
+        fprintf(stderr, "splash: syntax error: expected '{' in function '%s'\n",
+                name_tok->value);
+        return NULL;
+    }
+    advance(p); // consume {
+
+    // Extract raw body text between { and }
+    int body_start_pos = peek(p)->pos;
+
+    const char *brace_stops[] = {"}"};
+    CommandList *body_ast = parse_command_list_until(p, brace_stops, 1);
+    if (!body_ast) {
+        return NULL;
+    }
+
+    int body_end_pos = peek(p)->pos;
+
+    FunctionDef *def = function_def_new(name_tok->value);
+    if (p->input && body_end_pos > body_start_pos) {
+        int len = body_end_pos - body_start_pos;
+        def->body_src = xmalloc((size_t)len + 1);
+        memcpy(def->body_src, p->input + body_start_pos, (size_t)len);
+        def->body_src[len] = '\0';
+    } else {
+        def->body_src = xstrdup("");
+    }
+    command_list_free(body_ast);
+
+    // Expect }
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "}") != 0) {
+        fprintf(stderr, "splash: syntax error: expected '}' in function '%s'\n",
+                def->name);
+        function_def_free(def);
+        return NULL;
+    }
+    advance(p); // consume }
+
+    return def;
+}
+
 // Parse a single entry in a command list: either a compound command (if/for/...)
 // or a pipeline. Returns a Node with the parsed result.
 // On error, returns a NODE_PIPELINE with pipeline=NULL.
 static Node parse_entry(Parser *p) {
     Node node;
+    if (is_function_def(p)) {
+        node.type = NODE_FUNCTION_DEF;
+        node.func_def = parse_function_def(p);
+        return node;
+    }
     if (is_compound_keyword(p)) {
         if (strcmp(peek(p)->value, "if") == 0) {
             node.type = NODE_IF;
@@ -203,11 +282,12 @@ static Node parse_entry(Parser *p) {
 // Return true if a node represents a parse error.
 static int node_is_error(Node *n) {
     switch (n->type) {
-        case NODE_PIPELINE: return n->pipeline == NULL;
-        case NODE_IF:       return n->if_cmd == NULL;
-        case NODE_FOR:      return n->for_cmd == NULL;
-        case NODE_WHILE:    return n->while_cmd == NULL;
-        case NODE_CASE:     return n->case_cmd == NULL;
+        case NODE_PIPELINE:     return n->pipeline == NULL;
+        case NODE_IF:           return n->if_cmd == NULL;
+        case NODE_FOR:          return n->for_cmd == NULL;
+        case NODE_WHILE:        return n->while_cmd == NULL;
+        case NODE_CASE:         return n->case_cmd == NULL;
+        case NODE_FUNCTION_DEF: return n->func_def == NULL;
     }
     return 1;
 }
@@ -229,6 +309,9 @@ static void command_list_add_node(CommandList *list, Node *node) {
             break;
         case NODE_CASE:
             command_list_add_case(list, node->case_cmd);
+            break;
+        case NODE_FUNCTION_DEF:
+            command_list_add_function_def(list, node->func_def);
             break;
     }
 }

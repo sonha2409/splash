@@ -124,6 +124,9 @@ void node_free(Node *node) {
         case NODE_CASE:
             case_command_free(node->case_cmd);
             break;
+        case NODE_FUNCTION_DEF:
+            function_def_free(node->func_def);
+            break;
     }
 }
 
@@ -172,6 +175,13 @@ void command_list_add_case(CommandList *list, CaseCommand *case_cmd) {
     command_list_grow(list);
     list->entries[list->num_entries].type = NODE_CASE;
     list->entries[list->num_entries].case_cmd = case_cmd;
+    list->num_entries++;
+}
+
+void command_list_add_function_def(CommandList *list, FunctionDef *def) {
+    command_list_grow(list);
+    list->entries[list->num_entries].type = NODE_FUNCTION_DEF;
+    list->entries[list->num_entries].func_def = def;
     list->num_entries++;
 }
 
@@ -332,4 +342,20 @@ void if_command_free(IfCommand *cmd) {
     free(cmd->clauses);
     command_list_free(cmd->else_body);
     free(cmd);
+}
+
+FunctionDef *function_def_new(const char *name) {
+    FunctionDef *def = xmalloc(sizeof(FunctionDef));
+    def->name = xstrdup(name);
+    def->body_src = NULL;
+    return def;
+}
+
+void function_def_free(FunctionDef *def) {
+    if (!def) {
+        return;
+    }
+    free(def->name);
+    free(def->body_src);
+    free(def);
 }

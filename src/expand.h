@@ -14,8 +14,18 @@ void expand_set_last_bg_pid(int pid);
 // The string is copied.
 void expand_set_last_arg(const char *arg);
 
+// Push a positional parameter frame for function calls ($1..$N, $#, $@, $*).
+// params is an array of argc strings (not owned — they are copied).
+void expand_push_params(int argc, const char **params);
+
+// Pop the most recent positional parameter frame.
+void expand_pop_params(void);
+
+// Free all positional parameter frames. Called at shell exit.
+void expand_free_params(void);
+
 // Expand a variable name. Returns the value (not owned — do not free),
-// or NULL if undefined. Handles special variables: ?, $, !, _.
+// or NULL if undefined. Handles special variables: ?, $, !, _, 0-9, #, @, *.
 const char *expand_variable(const char *name);
 
 // Expand a tilde prefix. Returns a newly allocated string.

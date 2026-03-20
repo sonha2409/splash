@@ -110,7 +110,24 @@ static int read_and_expand_var(const char *input, int pos,
     }
 
     // $VAR form — variable name is alphanumeric + underscore
-    // Also handle single-char specials: $?, $$, $!, $_
+    // Also handle single-char specials: $?, $$, $!, $_, $#, $@, $*
+    // And positional parameters: $0-$9
+    if (input[i] >= '0' && input[i] <= '9') {
+        char name[2] = {input[i], '\0'};
+        const char *val = expand_variable(name);
+        if (val) {
+            buf_append_str(buf, buf_len, capacity, val);
+        }
+        return 1;
+    }
+    if (input[i] == '#' || input[i] == '@' || input[i] == '*') {
+        char name[2] = {input[i], '\0'};
+        const char *val = expand_variable(name);
+        if (val) {
+            buf_append_str(buf, buf_len, capacity, val);
+        }
+        return 1;
+    }
     if (input[i] == '?' || input[i] == '$' || input[i] == '!' ||
         input[i] == '_') {
         // Check if it's $_ followed by alphanumeric (then it's a var name)

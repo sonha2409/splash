@@ -21,6 +21,74 @@ static char *last_arg = NULL;
 static char status_buf[16];
 static char pid_buf[16];
 static char bg_pid_buf[16];
+static char param_count_buf[16];
+
+// Positional parameter stack for function calls
+typedef struct ParamFrame {
+    char **params;         // Array of parameter strings (owned copies)
+    int count;             // Number of parameters
+    char *joined;          // Cached "$*" / "$@" expansion (owned, lazily built)
+    struct ParamFrame *prev;
+} ParamFrame;
+
+static ParamFrame *param_stack = NULL;
+
+void expand_push_params(int argc, const char **params) {
+    ParamFrame *frame = xmalloc(sizeof(ParamFrame));
+    frame->count = argc;
+    frame->params = xmalloc(sizeof(char *) * (size_t)(argc > 0 ? argc : 1));
+    for (int i = 0; i < argc; i++) {
+        frame->params[i] = xstrdup(params[i]);
+    }
+    frame->joined = NULL;
+    frame->prev = param_stack;
+    param_stack = frame;
+}
+
+void expand_pop_params(void) {
+    if (!param_stack) {
+        return;
+    }
+    ParamFrame *frame = param_stack;
+    param_stack = frame->prev;
+    for (int i = 0; i < frame->count; i++) {
+        free(frame->params[i]);
+    }
+    free(frame->params);
+    free(frame->joined);
+    free(frame);
+}
+
+void expand_free_params(void) {
+    while (param_stack) {
+        expand_pop_params();
+    }
+}
+
+// Build a space-separated string from the current param frame.
+static const char *get_joined_params(void) {
+    if (!param_stack || param_stack->count == 0) {
+        return "";
+    }
+    if (param_stack->joined) {
+        return param_stack->joined;
+    }
+    size_t total = 0;
+    for (int i = 0; i < param_stack->count; i++) {
+        total += strlen(param_stack->params[i]);
+        if (i > 0) total++; // space separator
+    }
+    param_stack->joined = xmalloc(total + 1);
+    char *p = param_stack->joined;
+    for (int i = 0; i < param_stack->count; i++) {
+        if (i > 0) *p++ = ' ';
+        size_t len = strlen(param_stack->params[i]);
+        memcpy(p, param_stack->params[i], len);
+        p += len;
+    }
+    *p = '\0';
+    return param_stack->joined;
+}
 
 void expand_set_last_status(int status) {
     last_status = status;
@@ -61,6 +129,44 @@ const char *expand_variable(const char *name) {
                 return bg_pid_buf;
             case '_':
                 return last_arg ? last_arg : "";
+            case '#':
+                if (param_stack) {
+                    snprintf(param_count_buf, sizeof(param_count_buf),
+                             "%d", param_stack->count);
+                    return param_count_buf;
+                }
+                return "0";
+            case '@':
+            case '*':
+                return get_joined_params();
+            case '0':
+                return "splash";
+        }
+        // Positional parameters $1-$9
+        if (name[0] >= '1' && name[0] <= '9') {
+            int idx = name[0] - '1'; // $1 → index 0
+            if (param_stack && idx < param_stack->count) {
+                return param_stack->params[idx];
+            }
+            return "";
+        }
+    }
+
+    // Multi-digit positional parameters ($10, $11, ...)
+    if (name[0] >= '1' && name[0] <= '9') {
+        int all_digits = 1;
+        for (int i = 0; name[i]; i++) {
+            if (name[i] < '0' || name[i] > '9') {
+                all_digits = 0;
+                break;
+            }
+        }
+        if (all_digits) {
+            int idx = atoi(name) - 1;
+            if (param_stack && idx >= 0 && idx < param_stack->count) {
+                return param_stack->params[idx];
+            }
+            return "";
         }
     }
 

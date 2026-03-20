@@ -5,6 +5,8 @@
 
 #include "editor.h"
 #include "executor.h"
+#include "expand.h"
+#include "functions.h"
 #include "history.h"
 #include "jobs.h"
 #include "signals.h"
@@ -82,6 +84,9 @@ int main(void) {
         last_status = executor_execute_line(line);
         free(line);
     }
+
+    functions_free_all();
+    expand_free_params();
 
     (void)last_status;
     return 0;
