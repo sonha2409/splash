@@ -24,6 +24,14 @@ void expand_pop_params(void);
 // Free all positional parameter frames. Called at shell exit.
 void expand_free_params(void);
 
+// Returns 1 if currently executing inside a function, 0 otherwise.
+int expand_in_function(void);
+
+// Save the current value of a variable and set it to a new value.
+// Called by the `local` builtin. Returns 0 on success, -1 if not in a function.
+// If value is NULL, the variable is set to empty string.
+int expand_save_local(const char *name, const char *value);
+
 // Expand a variable name. Returns the value (not owned — do not free),
 // or NULL if undefined. Handles special variables: ?, $, !, _, 0-9, #, @, *.
 const char *expand_variable(const char *name);

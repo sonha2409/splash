@@ -261,3 +261,42 @@ Shell functions: define by name, store body text, execute in the current shell c
 
 - **Unit tests** (4 new in `test_parser.c`): basic function def, function with list, keyword not parsed as function, missing brace error
 - **Integration tests** (16 new in `test_m8_functions.sh`): basic call, multiple commands, `$1`-`$2`, `$#`, `$@`, `$*`, `${1}` braced, redefinition, nested calls, parameter isolation, recursion, if in function, for in function, `$0`
+
+## 8.7 `local` Variables
+
+### Design
+
+```
+local VAR=VALUE
+local VAR
+```
+
+`local` creates function-scoped variables. When the function returns, each `local` variable is restored to its previous value (or unset if it wasn't defined before the function call).
+
+### Implementation
+
+**No new AST node or parser change** — `local` is implemented purely as a builtin command.
+
+**Approach — save/restore on ParamFrame**: The existing `ParamFrame` stack (used for positional parameters) is extended with a `SavedLocal` array. Each `local` call saves the variable's current value onto the frame, then sets the new value via `setenv()`. When `expand_pop_params()` runs on function return, all saved locals are restored in reverse order.
+
+New types in `expand.c`:
+- `SavedLocal` — struct with `name` (owned) and `old_value` (owned, NULL if was unset)
+- `ParamFrame` extended with `locals`, `num_locals`, `locals_capacity`
+
+New functions in `expand.c/h`:
+- `expand_in_function()` — returns 1 if inside a function (param_stack != NULL)
+- `expand_save_local(name, value)` — saves current value and sets new one; returns -1 if not in a function
+
+**Builtin**: `builtin_local()` in `builtins.c` parses `VAR=VALUE` or `VAR` form, calls `expand_save_local()`.
+
+### Edge Cases
+
+- **`local` outside function**: Error message, returns 1
+- **`local VAR` (no value)**: Saves current value, sets to empty string
+- **Double `local` same var**: Only the first save is recorded (avoids losing the original value)
+- **Nested functions**: Each frame independently saves/restores; inner function's local doesn't corrupt outer's
+- **Tokenizer-time expansion**: `$var` in the same tokenized line as `local var=X` won't see the new value (known limitation of single-line expansion model). Callee functions on subsequent lines will see it.
+
+### Testing
+
+- **Integration tests** (8 new in `test_m8_functions.sh`): restore on return, unset var restored, error outside function, no-value form, multiple locals, nested functions, VAR=VALUE visible to callees, double local same var

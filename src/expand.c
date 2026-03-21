@@ -23,11 +23,20 @@ static char pid_buf[16];
 static char bg_pid_buf[16];
 static char param_count_buf[16];
 
+// Saved local variable (for restoring on function return)
+typedef struct SavedLocal {
+    char *name;            // Variable name (owned)
+    char *old_value;       // Previous value (owned), or NULL if was unset
+} SavedLocal;
+
 // Positional parameter stack for function calls
 typedef struct ParamFrame {
     char **params;         // Array of parameter strings (owned copies)
     int count;             // Number of parameters
     char *joined;          // Cached "$*" / "$@" expansion (owned, lazily built)
+    SavedLocal *locals;    // Array of saved local variables
+    int num_locals;        // Number of saved locals
+    int locals_capacity;   // Capacity of locals array
     struct ParamFrame *prev;
 } ParamFrame;
 
@@ -41,6 +50,9 @@ void expand_push_params(int argc, const char **params) {
         frame->params[i] = xstrdup(params[i]);
     }
     frame->joined = NULL;
+    frame->locals = NULL;
+    frame->num_locals = 0;
+    frame->locals_capacity = 0;
     frame->prev = param_stack;
     param_stack = frame;
 }
@@ -51,6 +63,20 @@ void expand_pop_params(void) {
     }
     ParamFrame *frame = param_stack;
     param_stack = frame->prev;
+
+    // Restore saved local variables (in reverse order for correctness)
+    for (int i = frame->num_locals - 1; i >= 0; i--) {
+        SavedLocal *sl = &frame->locals[i];
+        if (sl->old_value) {
+            setenv(sl->name, sl->old_value, 1);
+            free(sl->old_value);
+        } else {
+            unsetenv(sl->name);
+        }
+        free(sl->name);
+    }
+    free(frame->locals);
+
     for (int i = 0; i < frame->count; i++) {
         free(frame->params[i]);
     }
@@ -88,6 +114,51 @@ static const char *get_joined_params(void) {
     }
     *p = '\0';
     return param_stack->joined;
+}
+
+int expand_in_function(void) {
+    return param_stack != NULL;
+}
+
+int expand_save_local(const char *name, const char *value) {
+    if (!param_stack) {
+        return -1; // Not in a function
+    }
+
+    // Check if already saved in this frame (don't double-save)
+    for (int i = 0; i < param_stack->num_locals; i++) {
+        if (strcmp(param_stack->locals[i].name, name) == 0) {
+            // Already saved — just set the new value
+            if (value) {
+                setenv(name, value, 1);
+            } else {
+                setenv(name, "", 1);
+            }
+            return 0;
+        }
+    }
+
+    // Save current value
+    if (param_stack->num_locals >= param_stack->locals_capacity) {
+        int new_cap = param_stack->locals_capacity == 0 ? 4
+                      : param_stack->locals_capacity * 2;
+        param_stack->locals = xrealloc(param_stack->locals,
+                                       sizeof(SavedLocal) * (size_t)new_cap);
+        param_stack->locals_capacity = new_cap;
+    }
+
+    SavedLocal *sl = &param_stack->locals[param_stack->num_locals++];
+    sl->name = xstrdup(name);
+    const char *old = getenv(name);
+    sl->old_value = old ? xstrdup(old) : NULL;
+
+    // Set the new value
+    if (value) {
+        setenv(name, value, 1);
+    } else {
+        setenv(name, "", 1);
+    }
+    return 0;
 }
 
 void expand_set_last_status(int status) {

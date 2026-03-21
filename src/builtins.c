@@ -17,6 +17,7 @@
 #include "alias.h"
 #include "builtins.h"
 #include "executor.h"
+#include "expand.h"
 #include "history.h"
 #include "jobs.h"
 #include "table.h"
@@ -494,6 +495,34 @@ static int builtin_history(void) {
     return 0;
 }
 
+// local VAR=VALUE or local VAR
+static int builtin_local(SimpleCommand *cmd) {
+    if (!expand_in_function()) {
+        fprintf(stderr, "splash: local: can only be used in a function\n");
+        return 1;
+    }
+    if (cmd->argc < 2) {
+        fprintf(stderr, "splash: local: usage: local VAR[=VALUE] ...\n");
+        return 1;
+    }
+    for (int i = 1; i < cmd->argc; i++) {
+        char *eq = strchr(cmd->argv[i], '=');
+        if (eq) {
+            // local VAR=VALUE
+            size_t name_len = (size_t)(eq - cmd->argv[i]);
+            char *name = xmalloc(name_len + 1);
+            memcpy(name, cmd->argv[i], name_len);
+            name[name_len] = '\0';
+            expand_save_local(name, eq + 1);
+            free(name);
+        } else {
+            // local VAR (no value — set to empty)
+            expand_save_local(cmd->argv[i], NULL);
+        }
+    }
+    return 0;
+}
+
 int builtin_is_builtin(const char *name) {
     return strcmp(name, "exit") == 0 ||
            strcmp(name, "cd") == 0 ||
@@ -509,7 +538,8 @@ int builtin_is_builtin(const char *name) {
            strcmp(name, "unalias") == 0 ||
            strcmp(name, "type") == 0 ||
            strcmp(name, "which") == 0 ||
-           strcmp(name, "history") == 0;
+           strcmp(name, "history") == 0 ||
+           strcmp(name, "local") == 0;
 }
 
 int builtin_execute(SimpleCommand *cmd) {
@@ -530,6 +560,7 @@ int builtin_execute(SimpleCommand *cmd) {
     if (strcmp(name, "type") == 0)     return builtin_type(cmd);
     if (strcmp(name, "which") == 0)    return builtin_which(cmd);
     if (strcmp(name, "history") == 0)  return builtin_history();
+    if (strcmp(name, "local") == 0)    return builtin_local(cmd);
 
     fprintf(stderr, "splash: %s: unknown builtin\n", name);
     return 1;

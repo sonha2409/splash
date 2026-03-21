@@ -106,5 +106,50 @@ OUT=$(echo 'f() { echo "$0"; }; f' | $SHELL_BIN 2>/dev/null)
 assert_eq "\$0 is splash" "splash" "$OUT"
 
 echo ""
+echo "=== Milestone 8.7: Local Variables ==="
+
+# --- local restores variable after function ---
+
+OUT=$(printf 'setenv x global\nf() { local x=inner; }\nf\necho $x\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "local restores var on return" "global" "$OUT"
+
+# --- local with previously unset variable ---
+
+OUT=$(printf 'f() { local y=temp; }\nf\necho "y=$y"\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "local unsets var if was unset" "y=" "$OUT"
+
+# --- local outside function errors ---
+
+OUT=$(echo 'local x=5' | $SHELL_BIN 2>&1)
+assert_eq "local outside function errors" "splash: local: can only be used in a function" "$OUT"
+
+# --- local without value sets empty ---
+
+OUT=$(printf 'setenv z before\nf() { local z; }\nf\necho $z\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "local without value restores" "before" "$OUT"
+
+# --- multiple local vars ---
+
+OUT=$(printf 'setenv a AA\nsetenv b BB\nf() { local a=xx; local b=yy; }\nf\necho $a $b\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "multiple local vars restored" "AA BB" "$OUT"
+
+# --- nested functions with local ---
+
+OUT=$(printf 'setenv x global\nouter() { local x=outer_val; inner; }\ninner() { local x=inner_val; }\nouter\necho $x\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "nested local restores correctly" "global" "$OUT"
+
+# --- local VAR=VALUE sets the variable ---
+# Verify by calling a second function that reads the var after local sets it
+
+OUT=$(printf 'setenv msg old_val\nf() { local msg=hello_world; g; }\ng() { echo $msg; }\nf\necho $msg\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "local VAR=VALUE visible to callees, restored after" "hello_world
+old_val" "$OUT"
+
+# --- double local same var (no double-save) ---
+
+OUT=$(printf 'setenv x original\nf() { local x=first; local x=second; }\nf\necho $x\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "double local same var restores original" "original" "$OUT"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 exit $FAIL

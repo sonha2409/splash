@@ -24,9 +24,9 @@ This is a **living feature log**. Each feature row has a status column:
 
 After completing a feature, update its status to `DONE`, fill in the date, and add a note if anything notable happened (edge cases found, design changes, etc.). This way each new session knows exactly where we left off.
 
-**Last updated**: 2026-03-20
+**Last updated**: 2026-03-21
 **Current milestone**: Milestone 8 — Scripting (Progressive POSIX)
-**Last completed feature**: 8.6 Functions
+**Last completed feature**: 8.7 `local` variables
 
 ---
 
@@ -254,7 +254,7 @@ splash/
 | 8.4 | `while` / `until` | `while condition; do commands; done` | `DONE` | 2026-03-18 | Unified WhileCommand struct with is_until flag; raw source re-evaluation like for |
 | 8.5 | `case/esac` | `case word in pattern) commands;; ... esac` | `DONE` | 2026-03-19 | TOKEN_DSEMI for ;;; fnmatch() for glob patterns; sentinel unescape |
 | 8.6 | Functions | `fname() { commands; }`. Store in function table. Execute in current shell context. | `DONE` | 2026-03-20 | New functions.c module; positional params $1-$9/$#/$@/$* via frame stack in expand.c; tokenizer extended for $0-$9/$#/$@/$* |
-| 8.7 | `local` variables | Local variable scope in functions. | `TODO` | | |
+| 8.7 | `local` variables | Local variable scope in functions. | `DONE` | 2026-03-21 | Save/restore on ParamFrame; builtin only (no parser change); extends expand.c |
 | 8.8 | `return` | Return from functions with exit code. | `TODO` | | |
 | 8.9 | Here-documents | `<<EOF ... EOF` — feed literal text as stdin to a command. | `TODO` | | |
 | 8.10 | Arithmetic expansion | `$((expr))` — integer: `+`, `-`, `*`, `/`, `%`, `()` | `TODO` | | |
