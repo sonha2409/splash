@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -451,9 +452,78 @@ static int read_word(const char *input, int start, char **out_value) {
     return i - start;
 }
 
+// Expand $VAR and ${VAR} in a heredoc body string.
+// Returns a newly allocated string. Caller must free.
+static char *expand_heredoc_vars(const char *body) {
+    int cap = (int)strlen(body) * 2 + 1;
+    char *result = xmalloc((size_t)cap);
+    int rlen = 0;
+
+    for (int j = 0; body[j]; j++) {
+        if (body[j] == '\\' && body[j + 1] == '$') {
+            // Escaped dollar — keep literal $
+            if (rlen + 1 >= cap) { cap *= 2; result = xrealloc(result, (size_t)cap); }
+            result[rlen++] = '$';
+            j++; // skip the $
+            continue;
+        }
+        if (body[j] == '$') {
+            j++;
+            char name[256];
+            int nlen = 0;
+            if (body[j] == '{') {
+                j++;
+                while (body[j] && body[j] != '}' && nlen < 255) {
+                    name[nlen++] = body[j++];
+                }
+                if (body[j] == '}') j++;
+                j--; // will be incremented by for-loop
+            } else if (body[j] == '?' || body[j] == '$' ||
+                       body[j] == '!' || body[j] == '_' ||
+                       body[j] == '#' || body[j] == '@' ||
+                       body[j] == '*') {
+                name[nlen++] = body[j];
+            } else if (body[j] >= '0' && body[j] <= '9') {
+                name[nlen++] = body[j];
+            } else if ((body[j] >= 'a' && body[j] <= 'z') ||
+                       (body[j] >= 'A' && body[j] <= 'Z') ||
+                       body[j] == '_') {
+                while ((body[j] >= 'a' && body[j] <= 'z') ||
+                       (body[j] >= 'A' && body[j] <= 'Z') ||
+                       (body[j] >= '0' && body[j] <= '9') ||
+                       body[j] == '_') {
+                    if (nlen < 255) name[nlen++] = body[j];
+                    j++;
+                }
+                j--; // will be incremented by for-loop
+            } else {
+                // Lone $ — keep literal
+                if (rlen + 1 >= cap) { cap *= 2; result = xrealloc(result, (size_t)cap); }
+                result[rlen++] = '$';
+                j--; // re-process this char
+                continue;
+            }
+            name[nlen] = '\0';
+            const char *val = expand_variable(name);
+            if (val) {
+                int vlen = (int)strlen(val);
+                while (rlen + vlen >= cap) { cap *= 2; result = xrealloc(result, (size_t)cap); }
+                memcpy(result + rlen, val, (size_t)vlen);
+                rlen += vlen;
+            }
+            continue;
+        }
+        if (rlen + 1 >= cap) { cap *= 2; result = xrealloc(result, (size_t)cap); }
+        result[rlen++] = body[j];
+    }
+    result[rlen] = '\0';
+    return result;
+}
+
 TokenList *tokenizer_tokenize(const char *input) {
     TokenList *list = token_list_new();
     int i = 0;
+    int heredoc_skip_to = -1; // Position to jump to after newline (past heredoc body)
 
     while (input[i] != '\0') {
         // Skip whitespace (except newline)
@@ -466,6 +536,11 @@ TokenList *tokenizer_tokenize(const char *input) {
         if (input[i] == '\n') {
             token_list_append(list, TOKEN_NEWLINE, "\n", i, 1);
             i++;
+            // If a heredoc was started on this line, skip past its body
+            if (heredoc_skip_to >= 0) {
+                i = heredoc_skip_to;
+                heredoc_skip_to = -1;
+            }
             continue;
         }
 
@@ -515,9 +590,182 @@ TokenList *tokenizer_tokenize(const char *input) {
             continue;
         }
 
-        // Input redirect: <, <(
+        // Input redirect: <, <(, << (heredoc)
         if (input[i] == '<') {
-            if (input[i + 1] == '(') {
+            if (input[i + 1] == '<') {
+                // Here-document: <<[-]DELIMITER
+                int hd_start = i;
+                i += 2;
+                int strip_tabs = 0;
+                if (input[i] == '-') {
+                    strip_tabs = 1;
+                    i++;
+                }
+                // Skip whitespace before delimiter
+                while (input[i] == ' ' || input[i] == '\t') i++;
+
+                // Read delimiter word (handle quotes)
+                if (input[i] == '\'' || input[i] == '"') {
+                    char qc = input[i];
+                    i++;
+                    int ds = i;
+                    while (input[i] && input[i] != qc) i++;
+                    int dlen = i - ds;
+                    if (input[i] == qc) i++;
+                    char *delim = xmalloc((size_t)dlen + 1);
+                    memcpy(delim, input + ds, (size_t)dlen);
+                    delim[dlen] = '\0';
+
+                    // Find end of current line, then collect body
+                    int line_end = i;
+                    while (input[line_end] && input[line_end] != '\n')
+                        line_end++;
+                    int body_start = (input[line_end] == '\n')
+                                     ? line_end + 1 : line_end;
+
+                    // Collect body until delimiter line
+                    int bi = body_start;
+                    int body_end = bi;
+                    while (input[bi]) {
+                        int ls = bi;
+                        int cs = bi;
+                        if (strip_tabs) {
+                            while (input[cs] == '\t') cs++;
+                        }
+                        int le = cs;
+                        while (input[le] && input[le] != '\n') le++;
+                        int clen = le - cs;
+                        if (clen == dlen &&
+                            memcmp(input + cs, delim, (size_t)dlen) == 0) {
+                            body_end = ls;
+                            bi = (input[le] == '\n') ? le + 1 : le;
+                            break;
+                        }
+                        bi = (input[le] == '\n') ? le + 1 : le;
+                    }
+                    if (body_end == body_start && !input[bi]) {
+                        // Unterminated
+                        fprintf(stderr,
+                                "splash: warning: here-document "
+                                "delimited by '%s' not found\n", delim);
+                        body_end = bi;
+                    }
+
+                    // Build body (strip tabs if needed)
+                    int raw_len = body_end - body_start;
+                    char *body;
+                    if (strip_tabs && raw_len > 0) {
+                        body = xmalloc((size_t)raw_len + 1);
+                        int ri = 0;
+                        int si = body_start;
+                        int sol = 1;
+                        while (si < body_end) {
+                            if (sol && input[si] == '\t') { si++; continue; }
+                            sol = (input[si] == '\n');
+                            body[ri++] = input[si++];
+                        }
+                        body[ri] = '\0';
+                    } else {
+                        body = xmalloc((size_t)raw_len + 1);
+                        memcpy(body, input + body_start, (size_t)raw_len);
+                        body[raw_len] = '\0';
+                    }
+
+                    token_list_append(list, TOKEN_HEREDOC, body,
+                                      hd_start, i - hd_start);
+                    free(body);
+                    free(delim);
+                    heredoc_skip_to = bi;
+                    continue;
+                }
+
+                // Unquoted delimiter
+                int ds = i;
+                while (input[i] && input[i] != ' ' && input[i] != '\t' &&
+                       input[i] != '\n' && input[i] != ';' &&
+                       !is_special(input[i])) {
+                    i++;
+                }
+                int dlen = i - ds;
+                if (dlen == 0) {
+                    // No delimiter — treat as two <'s
+                    token_list_append(list, TOKEN_REDIRECT_IN, "<",
+                                      hd_start, 1);
+                    token_list_append(list, TOKEN_REDIRECT_IN, "<",
+                                      hd_start + 1, 1);
+                    continue;
+                }
+                char *delim = xmalloc((size_t)dlen + 1);
+                memcpy(delim, input + ds, (size_t)dlen);
+                delim[dlen] = '\0';
+
+                // Find end of current line, then collect body
+                int line_end = i;
+                while (input[line_end] && input[line_end] != '\n')
+                    line_end++;
+                int body_start = (input[line_end] == '\n')
+                                 ? line_end + 1 : line_end;
+
+                int bi = body_start;
+                int body_end = bi;
+                int found = 0;
+                while (input[bi]) {
+                    int ls = bi;
+                    int cs = bi;
+                    if (strip_tabs) {
+                        while (input[cs] == '\t') cs++;
+                    }
+                    int le = cs;
+                    while (input[le] && input[le] != '\n') le++;
+                    int clen = le - cs;
+                    if (clen == dlen &&
+                        memcmp(input + cs, delim, (size_t)dlen) == 0) {
+                        body_end = ls;
+                        bi = (input[le] == '\n') ? le + 1 : le;
+                        found = 1;
+                        break;
+                    }
+                    bi = (input[le] == '\n') ? le + 1 : le;
+                }
+                if (!found) {
+                    fprintf(stderr,
+                            "splash: warning: here-document "
+                            "delimited by '%s' not found\n", delim);
+                    body_end = bi;
+                }
+
+                // Build body (strip tabs if needed)
+                int raw_len = body_end - body_start;
+                char *body;
+                if (strip_tabs && raw_len > 0) {
+                    body = xmalloc((size_t)raw_len + 1);
+                    int ri = 0;
+                    int si = body_start;
+                    int sol = 1;
+                    while (si < body_end) {
+                        if (sol && input[si] == '\t') { si++; continue; }
+                        sol = (input[si] == '\n');
+                        body[ri++] = input[si++];
+                    }
+                    body[ri] = '\0';
+                } else {
+                    body = xmalloc((size_t)raw_len + 1);
+                    memcpy(body, input + body_start, (size_t)raw_len);
+                    body[raw_len] = '\0';
+                }
+
+                // Unquoted delimiter — expand variables in body
+                char *expanded = expand_heredoc_vars(body);
+                free(body);
+                body = expanded;
+
+                token_list_append(list, TOKEN_HEREDOC, body,
+                                  hd_start, i - hd_start);
+                free(body);
+                free(delim);
+                heredoc_skip_to = bi;
+                continue;
+            } else if (input[i + 1] == '(') {
                 token_list_append(list, TOKEN_PROCESS_SUB_IN, "<(", i, 2);
                 i += 2;
             } else {
@@ -628,6 +876,7 @@ const char *token_type_name(TokenType type) {
     case TOKEN_BACKTICK:          return "BACKTICK";
     case TOKEN_PROCESS_SUB_IN:    return "PROCESS_SUB_IN";
     case TOKEN_PROCESS_SUB_OUT:   return "PROCESS_SUB_OUT";
+    case TOKEN_HEREDOC:           return "HEREDOC";
     case TOKEN_EOF:               return "EOF";
     case TOKEN_INCOMPLETE:        return "INCOMPLETE";
     }

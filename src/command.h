@@ -17,6 +17,7 @@ typedef enum {
     REDIRECT_ERR,          // 2>  stderr to file (truncate)
     REDIRECT_OUT_ERR,      // >&  stdout+stderr to file (truncate)
     REDIRECT_APPEND_ERR,   // >>& stdout+stderr to file (append)
+    REDIRECT_HEREDOC,      // <<  stdin from inline text (target = body text)
 } RedirectType;
 
 typedef struct {

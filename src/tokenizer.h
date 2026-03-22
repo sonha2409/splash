@@ -23,6 +23,7 @@ typedef enum {
     TOKEN_BACKTICK,          // `
     TOKEN_PROCESS_SUB_IN,    // <(
     TOKEN_PROCESS_SUB_OUT,   // >(
+    TOKEN_HEREDOC,           // << (value contains body text)
     TOKEN_EOF,
     TOKEN_INCOMPLETE,        // Unterminated quote or escape
 } TokenType;

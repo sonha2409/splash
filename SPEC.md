@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-03-21
 **Current milestone**: Milestone 8 — Scripting (Progressive POSIX)
-**Last completed feature**: 8.8 `return`
+**Last completed feature**: 8.9 Here-documents
 
 ---
 
@@ -256,7 +256,7 @@ splash/
 | 8.6 | Functions | `fname() { commands; }`. Store in function table. Execute in current shell context. | `DONE` | 2026-03-20 | New functions.c module; positional params $1-$9/$#/$@/$* via frame stack in expand.c; tokenizer extended for $0-$9/$#/$@/$* |
 | 8.7 | `local` variables | Local variable scope in functions. | `DONE` | 2026-03-21 | Save/restore on ParamFrame; builtin only (no parser change); extends expand.c |
 | 8.8 | `return` | Return from functions with exit code. | `DONE` | 2026-03-21 | Flag-based early exit via return_pending in expand.c; checked in executor_execute_list |
-| 8.9 | Here-documents | `<<EOF ... EOF` — feed literal text as stdin to a command. | `TODO` | | |
+| 8.9 | Here-documents | `<<EOF ... EOF` — feed literal text as stdin to a command. | `DONE` | 2026-03-22 | Three-layer: main collects lines, tokenizer parses body with heredoc_skip_to, executor pipes to stdin; var expansion for unquoted delims |
 | 8.10 | Arithmetic expansion | `$((expr))` — integer: `+`, `-`, `*`, `/`, `%`, `()` | `TODO` | | |
 | 8.11 | Subshell grouping | `( commands )` — run in forked child. | `TODO` | | |
 | 8.12 | Brace grouping | `{ commands; }` — run in current shell. | `TODO` | | |

@@ -333,3 +333,50 @@ This ensures `return` propagates up through nested command lists (if/for/while b
 ### Testing
 
 - **Integration tests** (7 new in `test_m8_functions.sh`): return with code, return without arg, return 0, error outside function, return in if, doesn't stop caller, restores locals
+
+## 8.9 Here-documents
+
+### Design
+
+```
+command <<DELIMITER
+body text
+DELIMITER
+
+command <<'DELIMITER'   # no variable expansion
+body text
+DELIMITER
+
+command <<-DELIMITER    # strip leading tabs
+	body text
+DELIMITER
+```
+
+Feed literal text as stdin to a command. The delimiter is any word. Lines between `<<DELIMITER` and a line containing only `DELIMITER` form the body.
+
+### Implementation
+
+**Three-layer approach**:
+
+1. **Main loop** (`main.c`): `find_heredoc_delim()` scans a line for `<<`. If found, `collect_heredoc()` reads subsequent lines via `editor_readline()` until the delimiter line, concatenating everything into a single multi-line string. This handles both interactive and non-interactive (pipe/script) input.
+
+2. **Tokenizer** (`tokenizer.c`): New `TOKEN_HEREDOC` token type. When tokenizing `<<`, the tokenizer reads the delimiter, scans forward in the (now multi-line) input to collect the body, emits `TOKEN_HEREDOC` with the body text as value, and sets `heredoc_skip_to` so that when the newline at end-of-first-line is reached, the tokenizer jumps past the body. This preserves any tokens after `<<DELIM` on the same line (e.g., `| grep foo`).
+
+3. **Executor** (`executor.c`): `REDIRECT_HEREDOC` writes the body text to a pipe and `dup2()`s the read end to stdin.
+
+**Variable expansion**: New `expand_heredoc_vars()` in `tokenizer.c` performs `$VAR` and `${VAR}` expansion on the body for unquoted delimiters. Quoted delimiters (`<<'EOF'` or `<<"EOF"`) suppress expansion.
+
+**Tab stripping**: `<<-` strips leading tab characters from each body line. Implemented both in `collect_heredoc()` (delimiter matching ignores leading tabs) and in the tokenizer's body builder.
+
+### Edge Cases
+
+- **Empty body**: `<<EOF` followed immediately by `EOF` — zero-length body, valid
+- **Quoted delimiter**: `<<'EOF'` or `<<"EOF"` — no variable expansion
+- **Tab stripping**: `<<-EOF` — leading tabs removed from body lines and delimiter line
+- **Pipeline**: `cat <<EOF | grep foo` — tokens after `<<DELIM` on same line are preserved
+- **Special characters**: `*`, `?`, `|`, etc. in body — passed through literally
+- **Missing delimiter**: Warning printed, body extends to end of input
+
+### Testing
+
+- **Integration tests** (9 new in `test_m8_heredoc.sh`): basic, empty, variable expansion, quoted delimiter, pipeline, tab stripping, multiple lines, special chars, double-quoted delimiter

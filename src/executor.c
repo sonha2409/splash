@@ -34,6 +34,30 @@ static int apply_redirections(SimpleCommand *cmd) {
         int fd = -1;
         int flags = 0;
 
+        // Here-document: write body to a pipe, dup2 read-end to stdin
+        if (r->type == REDIRECT_HEREDOC) {
+            int hd_pipe[2];
+            if (pipe(hd_pipe) == -1) {
+                fprintf(stderr, "splash: heredoc pipe: %s\n", strerror(errno));
+                return -1;
+            }
+            // Write body text to write-end, then close it
+            const char *body = r->target;
+            size_t blen = strlen(body);
+            if (blen > 0) {
+                ssize_t w = write(hd_pipe[1], body, blen);
+                (void)w;
+            }
+            close(hd_pipe[1]);
+            if (dup2(hd_pipe[0], STDIN_FILENO) == -1) {
+                fprintf(stderr, "splash: heredoc dup2: %s\n", strerror(errno));
+                close(hd_pipe[0]);
+                return -1;
+            }
+            close(hd_pipe[0]);
+            continue;
+        }
+
         switch (r->type) {
             case REDIRECT_OUTPUT:
                 flags = O_WRONLY | O_CREAT | O_TRUNC;
@@ -53,6 +77,8 @@ static int apply_redirections(SimpleCommand *cmd) {
             case REDIRECT_APPEND_ERR:
                 flags = O_WRONLY | O_CREAT | O_APPEND;
                 break;
+            case REDIRECT_HEREDOC:
+                break; // handled above
         }
 
         fd = open(r->target, flags, 0644);
@@ -87,6 +113,8 @@ static int apply_redirections(SimpleCommand *cmd) {
                     return -1;
                 }
                 break;
+            case REDIRECT_HEREDOC:
+                break; // handled above, unreachable here
             case REDIRECT_OUT_ERR:
             case REDIRECT_APPEND_ERR:
                 if (dup2(fd, STDOUT_FILENO) == -1) {

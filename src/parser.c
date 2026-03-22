@@ -33,7 +33,8 @@ static int is_redirect_token(TokenType type) {
            type == TOKEN_REDIRECT_IN ||
            type == TOKEN_REDIRECT_ERR ||
            type == TOKEN_REDIRECT_OUT_ERR ||
-           type == TOKEN_REDIRECT_APPEND_ERR;
+           type == TOKEN_REDIRECT_APPEND_ERR ||
+           type == TOKEN_HEREDOC;
 }
 
 // Map token type to RedirectType.
@@ -105,6 +106,10 @@ static SimpleCommand *parse_simple_command(Parser *p) {
         if (peek(p)->type == TOKEN_WORD) {
             Token *tok = advance(p);
             simple_command_add_arg(cmd, tok->value);
+        } else if (peek(p)->type == TOKEN_HEREDOC) {
+            // Here-document: body text is in the token value
+            Token *hd = advance(p);
+            simple_command_add_redirect(cmd, REDIRECT_HEREDOC, hd->value);
         } else {
             // Redirection operator
             Token *op = advance(p);
