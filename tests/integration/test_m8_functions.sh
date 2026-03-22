@@ -151,5 +151,43 @@ OUT=$(printf 'setenv x original\nf() { local x=first; local x=second; }\nf\necho
 assert_eq "double local same var restores original" "original" "$OUT"
 
 echo ""
+echo "=== Milestone 8.8: return ==="
+
+# --- return with exit code ---
+
+OUT=$(printf 'f() { return 42; echo nope; }\nf\necho $?\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "return stops execution, sets status" "42" "$OUT"
+
+# --- return without arg uses last status ---
+
+OUT=$(printf 'f() { false; return; }\nf\necho $?\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "return without arg uses last status" "1" "$OUT"
+
+# --- return 0 ---
+
+OUT=$(printf 'f() { return 0; }\nf\necho $?\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "return 0" "0" "$OUT"
+
+# --- return outside function errors ---
+
+OUT=$(echo 'return 0' | $SHELL_BIN 2>&1)
+assert_eq "return outside function errors" "splash: return: can only be used in a function" "$OUT"
+
+# --- return in conditional ---
+
+OUT=$(printf 'f() { if true; then return 5; fi; echo nope; }\nf\necho $?\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "return inside if" "5" "$OUT"
+
+# --- return does not affect caller ---
+
+OUT=$(printf 'f() { return 7; }\nf\necho after\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "return does not stop caller" "after" "$OUT"
+
+# --- return with local vars still restores ---
+
+OUT=$(printf 'setenv x global\nf() { local x=inner; return 0; }\nf\necho $x\n' | $SHELL_BIN 2>/dev/null)
+assert_eq "return still restores local vars" "global" "$OUT"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 exit $FAIL

@@ -120,6 +120,16 @@ int expand_in_function(void) {
     return param_stack != NULL;
 }
 
+static int return_pending_flag = 0;
+
+void expand_set_return_pending(int pending) {
+    return_pending_flag = pending;
+}
+
+int expand_return_pending(void) {
+    return return_pending_flag;
+}
+
 int expand_save_local(const char *name, const char *value) {
     if (!param_stack) {
         return -1; // Not in a function

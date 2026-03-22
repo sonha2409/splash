@@ -27,6 +27,12 @@ void expand_free_params(void);
 // Returns 1 if currently executing inside a function, 0 otherwise.
 int expand_in_function(void);
 
+// Set the return-pending flag (called by `return` builtin).
+void expand_set_return_pending(int pending);
+
+// Check and clear the return-pending flag.
+int expand_return_pending(void);
+
 // Save the current value of a variable and set it to a new value.
 // Called by the `local` builtin. Returns 0 on success, -1 if not in a function.
 // If value is NULL, the variable is set to empty string.

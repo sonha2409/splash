@@ -495,6 +495,21 @@ static int builtin_history(void) {
     return 0;
 }
 
+// return [N]
+static int builtin_return(SimpleCommand *cmd) {
+    if (!expand_in_function()) {
+        fprintf(stderr, "splash: return: can only be used in a function\n");
+        return 1;
+    }
+    int status = expand_get_last_status();
+    if (cmd->argc > 1) {
+        status = atoi(cmd->argv[1]);
+    }
+    expand_set_last_status(status);
+    expand_set_return_pending(1);
+    return status;
+}
+
 // local VAR=VALUE or local VAR
 static int builtin_local(SimpleCommand *cmd) {
     if (!expand_in_function()) {
@@ -539,7 +554,8 @@ int builtin_is_builtin(const char *name) {
            strcmp(name, "type") == 0 ||
            strcmp(name, "which") == 0 ||
            strcmp(name, "history") == 0 ||
-           strcmp(name, "local") == 0;
+           strcmp(name, "local") == 0 ||
+           strcmp(name, "return") == 0;
 }
 
 int builtin_execute(SimpleCommand *cmd) {
@@ -561,6 +577,7 @@ int builtin_execute(SimpleCommand *cmd) {
     if (strcmp(name, "which") == 0)    return builtin_which(cmd);
     if (strcmp(name, "history") == 0)  return builtin_history();
     if (strcmp(name, "local") == 0)    return builtin_local(cmd);
+    if (strcmp(name, "return") == 0)   return builtin_return(cmd);
 
     fprintf(stderr, "splash: %s: unknown builtin\n", name);
     return 1;

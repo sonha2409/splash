@@ -300,3 +300,36 @@ New functions in `expand.c/h`:
 ### Testing
 
 - **Integration tests** (8 new in `test_m8_functions.sh`): restore on return, unset var restored, error outside function, no-value form, multiple locals, nested functions, VAR=VALUE visible to callees, double local same var
+
+## 8.8 `return`
+
+### Design
+
+```
+return [N]
+```
+
+Return from a function with exit status N (default: last command's exit status). Stops execution of the function body immediately.
+
+### Implementation
+
+**No AST or parser changes** — `return` is a pure builtin + executor flag.
+
+**Flag-based approach**: A `return_pending_flag` in `expand.c` signals early exit:
+- `builtin_return()` validates we're in a function, sets exit status, sets `return_pending_flag = 1`
+- `executor_execute_list()` checks `expand_return_pending()` after each node and breaks early
+- The function call site in `executor_execute()` clears the flag after `expand_pop_params()`
+
+This ensures `return` propagates up through nested command lists (if/for/while bodies) but stops at the function boundary.
+
+### Edge Cases
+
+- **`return` outside function**: Error message, returns 1
+- **`return` without arg**: Uses `expand_get_last_status()`
+- **`return` in if/for/while body**: Propagates up through all nested command lists
+- **`return` with `local`**: `expand_pop_params()` restores locals before flag is cleared
+- **Nested functions**: Inner `return` only exits inner function; outer continues normally
+
+### Testing
+
+- **Integration tests** (7 new in `test_m8_functions.sh`): return with code, return without arg, return 0, error outside function, return in if, doesn't stop caller, restores locals

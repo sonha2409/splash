@@ -652,6 +652,7 @@ int executor_execute(Pipeline *pl, const char *command_str) {
                                (const char **)(cmd->argv + 1));
             int status = executor_execute_line(func_body);
             expand_pop_params();
+            expand_set_return_pending(0); // Clear return flag at function boundary
             return status;
         }
     }
@@ -881,6 +882,11 @@ int executor_execute_list(CommandList *list, const char *command_str) {
 
         status = execute_node(&list->entries[i], command_str);
         expand_set_last_status(status);
+
+        // Check if `return` was called inside a function
+        if (expand_return_pending()) {
+            break;
+        }
     }
 
     return status;
