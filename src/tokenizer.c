@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "arith.h"
 #include "expand.h"
 #include "tokenizer.h"
 #include "util.h"
@@ -239,6 +240,71 @@ static int find_matching_paren(const char *input, int pos) {
     return -1; // unterminated
 }
 
+// Find the matching '))' for a '$((' starting after the second '('.
+// Tracks inner parenthesis depth so that e.g. $(( (1+2) * 3 )) works.
+// Returns the index of the first ')' of the closing '))', or -1 if unterminated.
+static int find_matching_arith(const char *input, int pos) {
+    int paren_depth = 0; // depth of inner ( ) grouping
+    int i = pos;
+
+    while (input[i] != '\0') {
+        if (input[i] == '(') {
+            paren_depth++;
+            i++;
+            continue;
+        }
+        if (input[i] == ')') {
+            if (paren_depth > 0) {
+                paren_depth--;
+                i++;
+                continue;
+            }
+            // No inner parens open — check for ))
+            if (input[i + 1] == ')') {
+                return i;
+            }
+            // Single ) with no inner parens — syntax error in expr,
+            // but let arith_eval handle it
+            i++;
+            continue;
+        }
+        i++;
+    }
+
+    return -1;
+}
+
+// Handle $((...)) arithmetic expansion starting at input[dollar_pos] where
+// input[dollar_pos]='$', input[dollar_pos+1]='(', input[dollar_pos+2]='('.
+// Evaluates the expression and appends the result to the word buffer.
+// Returns the number of characters consumed, or -1 for incomplete.
+static int handle_arith_expansion(const char *input, int dollar_pos,
+                                  char **buf, int *buf_len, int *capacity) {
+    int content_start = dollar_pos + 3; // first char after '$(('
+    int close_pos = find_matching_arith(input, content_start);
+
+    if (close_pos < 0) {
+        return -1; // unterminated
+    }
+
+    // Extract expression between $(( and ))
+    int expr_len = close_pos - content_start;
+    char *expr = xmalloc((size_t)expr_len + 1);
+    memcpy(expr, input + content_start, (size_t)expr_len);
+    expr[expr_len] = '\0';
+
+    int error = 0;
+    long long result = arith_eval(expr, &error);
+    free(expr);
+
+    char result_str[32];
+    snprintf(result_str, sizeof(result_str), "%lld", error ? 0 : result);
+    buf_append_str(buf, buf_len, capacity, result_str);
+
+    // Total consumed: $(( expr )) = close_pos + 2 - dollar_pos
+    return close_pos + 2 - dollar_pos;
+}
+
 // Handle $(...) command substitution starting at input[pos] where input[pos-1]
 // was '$' and input[pos] is '('. Extracts the command, executes it, and appends
 // the output to the word buffer.
@@ -315,6 +381,19 @@ static int read_word(const char *input, int start, char **out_value) {
             break;
         }
 
+        // Arithmetic expansion in unquoted context: $((expr))
+        if (c == '$' && input[i + 1] == '(' && input[i + 2] == '(') {
+            int consumed = handle_arith_expansion(input, i,
+                                                  &buf, &buf_len, &capacity);
+            if (consumed < 0) {
+                free(buf);
+                *out_value = NULL;
+                return -1;
+            }
+            i += consumed;
+            continue;
+        }
+
         // Command substitution in unquoted context
         if (c == '$' && input[i + 1] == '(') {
             int consumed = handle_command_subst(input, i,
@@ -382,6 +461,18 @@ static int read_word(const char *input, int start, char **out_value) {
                         buf_append_char(&buf, &buf_len, &capacity, '\\');
                         i++;
                     }
+                } else if (input[i] == '$' && input[i + 1] == '(' &&
+                           input[i + 2] == '(') {
+                    // Arithmetic expansion inside double quotes
+                    int consumed = handle_arith_expansion(input, i,
+                                                         &buf, &buf_len,
+                                                         &capacity);
+                    if (consumed < 0) {
+                        free(buf);
+                        *out_value = NULL;
+                        return -1;
+                    }
+                    i += consumed;
                 } else if (input[i] == '$' && input[i + 1] == '(') {
                     // Command substitution inside double quotes
                     int consumed = handle_command_subst(input, i,

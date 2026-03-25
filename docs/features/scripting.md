@@ -380,3 +380,51 @@ Feed literal text as stdin to a command. The delimiter is any word. Lines betwee
 ### Testing
 
 - **Integration tests** (9 new in `test_m8_heredoc.sh`): basic, empty, variable expansion, quoted delimiter, pipeline, tab stripping, multiple lines, special chars, double-quoted delimiter
+
+## 8.10 Arithmetic Expansion
+
+### Design
+
+```
+$((expr))
+```
+
+Evaluates integer arithmetic expressions and substitutes the result as a string. Supports standard operators with correct precedence, parenthesized grouping, variable references, and unary operators.
+
+### Implementation
+
+**New module**: `arith.c/h` — a self-contained recursive descent parser+evaluator for arithmetic expressions.
+
+Grammar:
+```
+expr     -> add_expr
+add_expr -> mul_expr (('+' | '-') mul_expr)*
+mul_expr -> unary (('*' | '/' | '%') unary)*
+unary    -> ('+' | '-') unary | primary
+primary  -> NUMBER | VARIABLE | '$' VARIABLE | '(' expr ')'
+```
+
+**Tokenizer** (`tokenizer.c`): Two integration points — the unquoted `$` handler and the double-quoted `$` handler in `read_word()`. Both check for `$((` before `$(` to distinguish arithmetic from command substitution (two-char lookahead).
+
+New helper functions:
+- `find_matching_arith()` — finds the closing `))` while tracking inner parenthesis depth. Unlike `find_matching_paren()` (which tracks `()`), this counts single `(` and `)` to correctly handle expressions like `$(( (1+2) * 3 ))` and `$((-(-3)))`.
+- `handle_arith_expansion()` — extracts the expression between `$((` and `))`, calls `arith_eval()`, converts the result to a string, and appends it to the word buffer.
+
+**Variable handling**: Bare identifiers (e.g., `x` in `$((x + 1))`) are treated as variable references per POSIX. Both bare names and `$var`/`${var}` forms are supported. Unset or non-numeric variables evaluate to 0.
+
+**Error handling**: Division by zero prints an error to stderr and evaluates to 0. Syntax errors (unexpected characters, unterminated expressions) also print errors and evaluate to 0.
+
+### Edge Cases
+
+- **Precedence**: `2 + 3 * 4` evaluates to 14, not 20
+- **Nested parens**: `$(( ((2 + 3)) ))` works correctly
+- **Inner parens in closing context**: `$((-(-3)))` — the `find_matching_arith` function tracks inner `()` depth to avoid consuming `)` from a paren group as part of the closing `))`
+- **Whitespace**: Freely allowed around operators and parens
+- **Division by zero**: Error message, evaluates to 0
+- **Unset variables**: Evaluate to 0 (POSIX behavior)
+- **Inside double quotes**: `"result=$((3+4))"` expands to `result=7`
+- **Multiple in one string**: `"a=$((1+1)) b=$((2+2))"` works
+
+### Testing
+
+- **Integration tests** (21 in `test_m8_arith.sh`): basic ops (+, -, *, /, %), precedence, parentheses, nested parens, unary +/-, double negation, bare variables, $var variables, unset var, inside double quotes, multiple in quotes, whitespace, no whitespace, division by zero, combined with string context
