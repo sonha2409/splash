@@ -127,6 +127,9 @@ void node_free(Node *node) {
         case NODE_FUNCTION_DEF:
             function_def_free(node->func_def);
             break;
+        case NODE_SUBSHELL:
+            subshell_command_free(node->subshell_cmd);
+            break;
     }
 }
 
@@ -175,6 +178,13 @@ void command_list_add_case(CommandList *list, CaseCommand *case_cmd) {
     command_list_grow(list);
     list->entries[list->num_entries].type = NODE_CASE;
     list->entries[list->num_entries].case_cmd = case_cmd;
+    list->num_entries++;
+}
+
+void command_list_add_subshell(CommandList *list, SubshellCommand *cmd) {
+    command_list_grow(list);
+    list->entries[list->num_entries].type = NODE_SUBSHELL;
+    list->entries[list->num_entries].subshell_cmd = cmd;
     list->num_entries++;
 }
 
@@ -358,4 +368,18 @@ void function_def_free(FunctionDef *def) {
     free(def->name);
     free(def->body_src);
     free(def);
+}
+
+SubshellCommand *subshell_command_new(void) {
+    SubshellCommand *cmd = xmalloc(sizeof(SubshellCommand));
+    cmd->body_src = NULL;
+    return cmd;
+}
+
+void subshell_command_free(SubshellCommand *cmd) {
+    if (!cmd) {
+        return;
+    }
+    free(cmd->body_src);
+    free(cmd);
 }

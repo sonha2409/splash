@@ -869,6 +869,39 @@ static int execute_case_command(CaseCommand *cmd,
     return status;
 }
 
+// Execute a subshell: ( commands )
+// Forks a child process, runs the body, and returns the child's exit status.
+static int execute_subshell(SubshellCommand *cmd,
+                            const char *command_str __attribute__((unused))) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "splash: fork: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (pid == 0) {
+        // Child: run body and exit
+        signals_default();
+        int status = executor_execute_line(cmd->body_src);
+        _exit(status);
+    }
+
+    // Parent: wait for child
+    int status;
+    pid_t result;
+    do {
+        result = waitpid(pid, &status, 0);
+    } while (result == -1 && errno == EINTR);
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return 1;
+}
+
 // Execute a single node (pipeline or compound command).
 static int execute_node(Node *node, const char *command_str) {
     switch (node->type) {
@@ -886,6 +919,8 @@ static int execute_node(Node *node, const char *command_str) {
             // Register the function — no execution, just definition
             functions_define(node->func_def->name, node->func_def->body_src);
             return 0;
+        case NODE_SUBSHELL:
+            return execute_subshell(node->subshell_cmd, command_str);
     }
     return 0;
 }

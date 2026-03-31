@@ -428,3 +428,42 @@ New helper functions:
 ### Testing
 
 - **Integration tests** (21 in `test_m8_arith.sh`): basic ops (+, -, *, /, %), precedence, parentheses, nested parens, unary +/-, double negation, bare variables, $var variables, unset var, inside double quotes, multiple in quotes, whitespace, no whitespace, division by zero, combined with string context
+
+## 8.11 Subshell Grouping
+
+### Design
+
+```
+( commands )
+```
+
+Runs a command list in a forked child process. The subshell inherits the parent's environment but changes (variable assignments, cd, etc.) do not affect the parent. The parent waits for the child and captures its exit status.
+
+### Implementation
+
+**New AST node**: `SubshellCommand` in `command.h` with a single `body_src` field (raw body source text). Added `NODE_SUBSHELL` to the `Node` tagged union.
+
+**Parser**: `parse_subshell()` triggers when `parse_entry()` sees `TOKEN_LPAREN`. It consumes `(`, records the start position, parses the body via `parse_command_list_until()` (to validate syntax and advance past it), extracts the raw source via token positions, then expects `TOKEN_RPAREN`.
+
+`parse_command_list_until()` was updated to treat `TOKEN_RPAREN` as a stop condition, so it doesn't try to parse `)` as a command.
+
+**Executor**: `execute_subshell()` forks a child process:
+- **Child**: Resets signals to defaults via `signals_default()`, executes the body via `executor_execute_line(body_src)`, and calls `_exit()` with the result.
+- **Parent**: Waits with `waitpid()` (retrying on `EINTR`), extracts exit status via `WEXITSTATUS()` or signal number via `WTERMSIG()`.
+
+### Edge Cases
+
+- **Empty subshell**: `()` — valid, no-op, returns 0
+- **Multiple commands**: `(echo a; echo b; echo c)` — full command list support
+- **Exit code propagation**: `(exit 42)` followed by `echo ${?}` on the next line returns 42
+- **Conditional chaining**: `(false) || echo fallback` — subshell exit code participates in `&&`/`||`
+- **Environment isolation**: `export X=outer; (export X=inner; ...)` — inner change does not leak to parent
+
+### Known Limitations
+
+- **Subshells as pipeline stages**: `(echo hello) | tr a-z A-Z` does not work. The parser only supports `SimpleCommand` as pipeline stages, not compound commands. This is a common shell feature that could be added later by allowing `Node` types in pipeline stages.
+- **`exit` in subshell prints goodbye**: The `exit` builtin unconditionally prints its farewell message. In a subshell context this is cosmetic noise; could be suppressed by detecting subshell context.
+
+### Testing
+
+- **Manual tests** (6 cases): basic subshell, multiple commands, exit code propagation, conditional chaining with `&&`/`||`, environment isolation, all unit tests pass under sanitizers

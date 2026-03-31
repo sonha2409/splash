@@ -9,6 +9,7 @@ typedef struct ForCommand ForCommand;
 typedef struct WhileCommand WhileCommand;
 typedef struct CaseCommand CaseCommand;
 typedef struct FunctionDef FunctionDef;
+typedef struct SubshellCommand SubshellCommand;
 
 typedef enum {
     REDIRECT_OUTPUT,       // >   stdout to file (truncate)
@@ -92,6 +93,7 @@ typedef enum {
     NODE_WHILE,
     NODE_CASE,
     NODE_FUNCTION_DEF,
+    NODE_SUBSHELL,
 } NodeType;
 
 typedef struct {
@@ -103,6 +105,7 @@ typedef struct {
         WhileCommand *while_cmd; // NODE_WHILE (owned)
         CaseCommand *case_cmd;   // NODE_CASE (owned)
         FunctionDef *func_def;   // NODE_FUNCTION_DEF (owned)
+        SubshellCommand *subshell_cmd; // NODE_SUBSHELL (owned)
     };
 } Node;
 
@@ -210,6 +213,20 @@ CaseClause *case_command_add_clause(CaseCommand *cmd);
 
 // Free a CaseCommand and all its data.
 void case_command_free(CaseCommand *cmd);
+
+// ( commands ) — subshell: run commands in a forked child process.
+struct SubshellCommand {
+    char *body_src;    // Raw body source text (owned)
+};
+
+// Creates a new SubshellCommand. Caller takes ownership.
+SubshellCommand *subshell_command_new(void);
+
+// Free a SubshellCommand and all its data.
+void subshell_command_free(SubshellCommand *cmd);
+
+// Append a subshell command to the command list. Ownership transferred.
+void command_list_add_subshell(CommandList *list, SubshellCommand *cmd);
 
 // fname() { body; } — shell function definition.
 struct FunctionDef {

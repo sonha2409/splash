@@ -90,6 +90,7 @@ static ForCommand *parse_for_command(Parser *p);
 static WhileCommand *parse_while_command(Parser *p, int is_until);
 static CaseCommand *parse_case_command(Parser *p);
 static FunctionDef *parse_function_def(Parser *p);
+static SubshellCommand *parse_subshell(Parser *p);
 
 // Parse a simple command: mix of WORD tokens and redirections.
 // Grammar: command = (WORD | redirection)+
@@ -247,6 +248,46 @@ static FunctionDef *parse_function_def(Parser *p) {
     return def;
 }
 
+// Parse a subshell: ( command_list )
+// Assumes the current token is TOKEN_LPAREN.
+static SubshellCommand *parse_subshell(Parser *p) {
+    advance(p); // consume (
+
+    int body_start_pos = peek(p)->pos;
+
+    const char *rparen_stops[] = {")"};
+    // We can't use stop words here because ) is TOKEN_RPAREN, not a WORD.
+    // Instead, parse until we hit TOKEN_RPAREN or EOF.
+    // Use parse_command_list_until with no stops, then check for ).
+    CommandList *body_ast = parse_command_list_until(p, rparen_stops, 0);
+    if (!body_ast) {
+        return NULL;
+    }
+
+    int body_end_pos = peek(p)->pos;
+
+    SubshellCommand *cmd = subshell_command_new();
+    if (p->input && body_end_pos > body_start_pos) {
+        int len = body_end_pos - body_start_pos;
+        cmd->body_src = xmalloc((size_t)len + 1);
+        memcpy(cmd->body_src, p->input + body_start_pos, (size_t)len);
+        cmd->body_src[len] = '\0';
+    } else {
+        cmd->body_src = xstrdup("");
+    }
+    command_list_free(body_ast);
+
+    // Expect )
+    if (peek(p)->type != TOKEN_RPAREN) {
+        fprintf(stderr, "splash: syntax error: expected ')' for subshell\n");
+        subshell_command_free(cmd);
+        return NULL;
+    }
+    advance(p); // consume )
+
+    return cmd;
+}
+
 // Parse a single entry in a command list: either a compound command (if/for/...)
 // or a pipeline. Returns a Node with the parsed result.
 // On error, returns a NODE_PIPELINE with pipeline=NULL.
@@ -277,6 +318,9 @@ static Node parse_entry(Parser *p) {
             node.type = NODE_PIPELINE;
             node.pipeline = NULL;
         }
+    } else if (peek(p)->type == TOKEN_LPAREN) {
+        node.type = NODE_SUBSHELL;
+        node.subshell_cmd = parse_subshell(p);
     } else {
         node.type = NODE_PIPELINE;
         node.pipeline = parse_pipeline(p);
@@ -293,6 +337,7 @@ static int node_is_error(Node *n) {
         case NODE_WHILE:        return n->while_cmd == NULL;
         case NODE_CASE:         return n->case_cmd == NULL;
         case NODE_FUNCTION_DEF: return n->func_def == NULL;
+        case NODE_SUBSHELL:     return n->subshell_cmd == NULL;
     }
     return 1;
 }
@@ -317,6 +362,9 @@ static void command_list_add_node(CommandList *list, Node *node) {
             break;
         case NODE_FUNCTION_DEF:
             command_list_add_function_def(list, node->func_def);
+            break;
+        case NODE_SUBSHELL:
+            command_list_add_subshell(list, node->subshell_cmd);
             break;
     }
 }
@@ -343,7 +391,8 @@ static CommandList *parse_command_list_until(Parser *p, const char **stops,
     if (is_stop_word(p, stops, num_stops) ||
         peek(p)->type == TOKEN_EOF ||
         peek(p)->type == TOKEN_INCOMPLETE ||
-        peek(p)->type == TOKEN_DSEMI) {
+        peek(p)->type == TOKEN_DSEMI ||
+        peek(p)->type == TOKEN_RPAREN) {
         // Empty command list
         return command_list_new();
     }
@@ -378,6 +427,7 @@ static CommandList *parse_command_list_until(Parser *p, const char **stops,
                 peek(p)->type == TOKEN_NEWLINE ||
                 peek(p)->type == TOKEN_INCOMPLETE ||
                 peek(p)->type == TOKEN_DSEMI ||
+                peek(p)->type == TOKEN_RPAREN ||
                 is_stop_word(p, stops, num_stops)) {
                 break;
             }
