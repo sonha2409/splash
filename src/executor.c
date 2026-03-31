@@ -921,6 +921,8 @@ static int execute_node(Node *node, const char *command_str) {
             return 0;
         case NODE_SUBSHELL:
             return execute_subshell(node->subshell_cmd, command_str);
+        case NODE_BRACE_GROUP:
+            return executor_execute_line(node->brace_group_cmd->body_src);
     }
     return 0;
 }

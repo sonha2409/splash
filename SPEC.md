@@ -25,8 +25,8 @@ This is a **living feature log**. Each feature row has a status column:
 After completing a feature, update its status to `DONE`, fill in the date, and add a note if anything notable happened (edge cases found, design changes, etc.). This way each new session knows exactly where we left off.
 
 **Last updated**: 2026-03-30
-**Current milestone**: Milestone 8 — Scripting (Progressive POSIX)
-**Last completed feature**: 8.11 Subshell grouping
+**Current milestone**: Milestone 9 — Configuration System
+**Last completed feature**: 8.12 Brace grouping
 
 ---
 
@@ -259,7 +259,7 @@ splash/
 | 8.9 | Here-documents | `<<EOF ... EOF` — feed literal text as stdin to a command. | `DONE` | 2026-03-22 | Three-layer: main collects lines, tokenizer parses body with heredoc_skip_to, executor pipes to stdin; var expansion for unquoted delims |
 | 8.10 | Arithmetic expansion | `$((expr))` — integer: `+`, `-`, `*`, `/`, `%`, `()` | `DONE` | 2026-03-25 | New arith.c module; recursive descent evaluator; bare variable refs; integrated in tokenizer read_word for unquoted and double-quoted contexts |
 | 8.11 | Subshell grouping | `( commands )` — run in forked child. | `DONE` | 2026-03-30 | New SubshellCommand AST node; fork+exec body; known limitation: subshells can't be pipeline stages |
-| 8.12 | Brace grouping | `{ commands; }` — run in current shell. | `TODO` | | |
+| 8.12 | Brace grouping | `{ commands; }` — run in current shell. | `DONE` | 2026-03-30 | New BraceGroupCommand AST node; no fork, runs in current context; env changes persist |
 
 **Verification**: Shell script with `if`, `for`, function, and here-doc runs correctly. `for f in *.c; do echo $f; done` lists C files.
 

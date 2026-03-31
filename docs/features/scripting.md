@@ -467,3 +467,43 @@ Runs a command list in a forked child process. The subshell inherits the parent'
 ### Testing
 
 - **Manual tests** (6 cases): basic subshell, multiple commands, exit code propagation, conditional chaining with `&&`/`||`, environment isolation, all unit tests pass under sanitizers
+
+## 8.12 Brace Grouping
+
+### Design
+
+```
+{ commands; }
+```
+
+Runs a command list in the **current shell** (no fork). Unlike subshells `( ... )`, variable assignments, `cd`, and other side effects persist after the brace group completes. This is useful for grouping commands with redirections or conditional operators.
+
+POSIX requires `{` and `}` to be separate words and the body to end with `;` or newline before `}`.
+
+### Implementation
+
+**New AST node**: `BraceGroupCommand` in `command.h` with a single `body_src` field (raw body source text, same pattern as subshell/for/while). Added `NODE_BRACE_GROUP` to the `Node` tagged union.
+
+**Parser**: `parse_brace_group()` triggers when `parse_entry()` sees a WORD token `{` that is NOT part of a function definition (the `is_function_def()` check runs first). It consumes `{`, records the start position, parses the body via `parse_command_list_until({"}"})`, extracts raw source via token positions, then expects a WORD `}`.
+
+Since `{` and `}` are already tokenized as regular WORD tokens by the tokenizer (unlike `(` and `)` which have dedicated token types), the brace group uses stop-word matching rather than token-type matching.
+
+**Executor**: `execute_node()` handles `NODE_BRACE_GROUP` by simply calling `executor_execute_line(body_src)` — no fork, no special setup. The body runs in the current process context, so all side effects (env changes, cd, function defs) persist.
+
+### Edge Cases
+
+- **Trailing `;` required**: `{ echo hello; }` — the `;` before `}` is needed since `}` is a word, not an operator
+- **Empty brace group**: `{ }` — valid, no-op, returns 0
+- **Multiple commands**: `{ echo a; echo b; echo c; }` — full command list support
+- **Conditional chaining**: `{ true; } && echo ok` and `{ false; } || echo fallback` work
+- **Env persistence**: `{ export X=new; }` → `X` is set in the current shell
+- **Function defs preserved**: `name() { body; }` still works — `is_function_def()` lookahead runs before brace group detection
+- **Nested**: Brace groups inside if/for/while, and vice versa, all work through raw-body re-evaluation
+
+### Known Limitations
+
+- **Brace groups as pipeline stages**: Like subshells, `{ echo hello; } | tr a-z A-Z` does not work — same parser limitation with compound commands in pipelines.
+
+### Testing
+
+- **Manual tests** (7 cases): basic brace group, multiple commands, exit code propagation, conditional chaining with `&&`/`||`, current-shell env persistence vs subshell isolation, function defs unaffected, empty brace group, all unit tests pass under sanitizers

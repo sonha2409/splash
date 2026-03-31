@@ -10,6 +10,7 @@ typedef struct WhileCommand WhileCommand;
 typedef struct CaseCommand CaseCommand;
 typedef struct FunctionDef FunctionDef;
 typedef struct SubshellCommand SubshellCommand;
+typedef struct BraceGroupCommand BraceGroupCommand;
 
 typedef enum {
     REDIRECT_OUTPUT,       // >   stdout to file (truncate)
@@ -94,6 +95,7 @@ typedef enum {
     NODE_CASE,
     NODE_FUNCTION_DEF,
     NODE_SUBSHELL,
+    NODE_BRACE_GROUP,
 } NodeType;
 
 typedef struct {
@@ -106,6 +108,7 @@ typedef struct {
         CaseCommand *case_cmd;   // NODE_CASE (owned)
         FunctionDef *func_def;   // NODE_FUNCTION_DEF (owned)
         SubshellCommand *subshell_cmd; // NODE_SUBSHELL (owned)
+        BraceGroupCommand *brace_group_cmd; // NODE_BRACE_GROUP (owned)
     };
 } Node;
 
@@ -227,6 +230,20 @@ void subshell_command_free(SubshellCommand *cmd);
 
 // Append a subshell command to the command list. Ownership transferred.
 void command_list_add_subshell(CommandList *list, SubshellCommand *cmd);
+
+// { commands; } — brace group: run commands in the current shell.
+struct BraceGroupCommand {
+    char *body_src;    // Raw body source text (owned)
+};
+
+// Creates a new BraceGroupCommand. Caller takes ownership.
+BraceGroupCommand *brace_group_command_new(void);
+
+// Free a BraceGroupCommand and all its data.
+void brace_group_command_free(BraceGroupCommand *cmd);
+
+// Append a brace group command to the command list. Ownership transferred.
+void command_list_add_brace_group(CommandList *list, BraceGroupCommand *cmd);
 
 // fname() { body; } — shell function definition.
 struct FunctionDef {

@@ -91,6 +91,7 @@ static WhileCommand *parse_while_command(Parser *p, int is_until);
 static CaseCommand *parse_case_command(Parser *p);
 static FunctionDef *parse_function_def(Parser *p);
 static SubshellCommand *parse_subshell(Parser *p);
+static BraceGroupCommand *parse_brace_group(Parser *p);
 
 // Parse a simple command: mix of WORD tokens and redirections.
 // Grammar: command = (WORD | redirection)+
@@ -288,6 +289,43 @@ static SubshellCommand *parse_subshell(Parser *p) {
     return cmd;
 }
 
+// Parse a brace group: { command_list }
+// Assumes the current token is a WORD "{".
+static BraceGroupCommand *parse_brace_group(Parser *p) {
+    advance(p); // consume {
+
+    int body_start_pos = peek(p)->pos;
+
+    const char *brace_stops[] = {"}"};
+    CommandList *body_ast = parse_command_list_until(p, brace_stops, 1);
+    if (!body_ast) {
+        return NULL;
+    }
+
+    int body_end_pos = peek(p)->pos;
+
+    BraceGroupCommand *cmd = brace_group_command_new();
+    if (p->input && body_end_pos > body_start_pos) {
+        int len = body_end_pos - body_start_pos;
+        cmd->body_src = xmalloc((size_t)len + 1);
+        memcpy(cmd->body_src, p->input + body_start_pos, (size_t)len);
+        cmd->body_src[len] = '\0';
+    } else {
+        cmd->body_src = xstrdup("");
+    }
+    command_list_free(body_ast);
+
+    // Expect }
+    if (peek(p)->type != TOKEN_WORD || strcmp(peek(p)->value, "}") != 0) {
+        fprintf(stderr, "splash: syntax error: expected '}' for brace group\n");
+        brace_group_command_free(cmd);
+        return NULL;
+    }
+    advance(p); // consume }
+
+    return cmd;
+}
+
 // Parse a single entry in a command list: either a compound command (if/for/...)
 // or a pipeline. Returns a Node with the parsed result.
 // On error, returns a NODE_PIPELINE with pipeline=NULL.
@@ -321,6 +359,10 @@ static Node parse_entry(Parser *p) {
     } else if (peek(p)->type == TOKEN_LPAREN) {
         node.type = NODE_SUBSHELL;
         node.subshell_cmd = parse_subshell(p);
+    } else if (peek(p)->type == TOKEN_WORD &&
+               strcmp(peek(p)->value, "{") == 0) {
+        node.type = NODE_BRACE_GROUP;
+        node.brace_group_cmd = parse_brace_group(p);
     } else {
         node.type = NODE_PIPELINE;
         node.pipeline = parse_pipeline(p);
@@ -338,6 +380,7 @@ static int node_is_error(Node *n) {
         case NODE_CASE:         return n->case_cmd == NULL;
         case NODE_FUNCTION_DEF: return n->func_def == NULL;
         case NODE_SUBSHELL:     return n->subshell_cmd == NULL;
+        case NODE_BRACE_GROUP:  return n->brace_group_cmd == NULL;
     }
     return 1;
 }
@@ -365,6 +408,9 @@ static void command_list_add_node(CommandList *list, Node *node) {
             break;
         case NODE_SUBSHELL:
             command_list_add_subshell(list, node->subshell_cmd);
+            break;
+        case NODE_BRACE_GROUP:
+            command_list_add_brace_group(list, node->brace_group_cmd);
             break;
     }
 }

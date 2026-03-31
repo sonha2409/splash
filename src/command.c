@@ -130,6 +130,9 @@ void node_free(Node *node) {
         case NODE_SUBSHELL:
             subshell_command_free(node->subshell_cmd);
             break;
+        case NODE_BRACE_GROUP:
+            brace_group_command_free(node->brace_group_cmd);
+            break;
     }
 }
 
@@ -382,4 +385,25 @@ void subshell_command_free(SubshellCommand *cmd) {
     }
     free(cmd->body_src);
     free(cmd);
+}
+
+BraceGroupCommand *brace_group_command_new(void) {
+    BraceGroupCommand *cmd = xmalloc(sizeof(BraceGroupCommand));
+    cmd->body_src = NULL;
+    return cmd;
+}
+
+void brace_group_command_free(BraceGroupCommand *cmd) {
+    if (!cmd) {
+        return;
+    }
+    free(cmd->body_src);
+    free(cmd);
+}
+
+void command_list_add_brace_group(CommandList *list, BraceGroupCommand *cmd) {
+    command_list_grow(list);
+    list->entries[list->num_entries].type = NODE_BRACE_GROUP;
+    list->entries[list->num_entries].brace_group_cmd = cmd;
+    list->num_entries++;
 }
