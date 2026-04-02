@@ -45,3 +45,51 @@ Unit tests in `tests/test_config.c` (17 assertions):
 - Idempotent when directory already exists
 
 All tests use temporary directories and restore environment variables after completion.
+
+## 9.2 config.toml Parsing
+
+### Design
+
+A minimal hand-rolled TOML parser — no external dependencies. Supports only what splash needs:
+
+- **Sections**: `[section_name]` headers
+- **Key-value pairs**: `key = value`
+- **Value types**: quoted strings (double or single), integers, booleans (`true`/`false`), bare strings
+- **Comments**: lines starting with `#`, inline `# comment` after values
+- **Escape sequences** in double-quoted strings: `\n`, `\t`, `\\`, `\"`
+- No nested tables, arrays, or inline tables
+
+### Implementation
+
+- **Storage**: flat array of `ConfigEntry` structs (key-value string pairs), max 256 entries
+- Keys are stored in `section.name` format (e.g., `"prompt.format"`, `"history.max_size"`)
+- Duplicate keys: last value wins (silently overwritten)
+
+API:
+- `config_load()` — parses `config.toml` from the config directory; silently skips if file doesn't exist
+- `config_load_from(path)` — parses from an explicit path (used by tests)
+- `config_get_string(key)` — returns value or NULL
+- `config_get_int(key, default)` — parses as integer, returns default on failure
+- `config_get_bool(key, default)` — recognizes true/false case-insensitively
+
+### Edge Cases
+
+- Missing file: silently skipped
+- Malformed section header (no `]`): warned, line skipped
+- Missing `=`: warned, line skipped
+- Empty key: warned, line skipped
+- Unknown sections: accepted and stored (forward-compatible)
+- Invalid int (e.g., `"hello"` for `config_get_int`): returns default value
+
+### Testing
+
+Unit tests in `tests/test_config.c` (27 new assertions):
+- Basic section/key/value parsing with strings, ints, bools
+- Single-quoted literal strings
+- Bare (unquoted) values
+- Inline comments stripped
+- Escape sequences in double-quoted strings
+- Duplicate keys (last wins)
+- Missing key returns default
+- Invalid int returns default
+- Bool case-insensitive matching

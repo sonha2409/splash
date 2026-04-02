@@ -164,8 +164,9 @@ int main(void) {
         editor_init();
     }
 
-    // Initialize config directory (~/.config/splash/ or $XDG_CONFIG_HOME/splash/)
+    // Initialize config directory and load config.toml
     config_init();
+    config_load();
 
     // Auto-source config files (interactive only)
     if (interactive) {

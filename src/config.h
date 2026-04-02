@@ -10,6 +10,24 @@ void config_init(void);
 // Returns NULL if config_init() failed (e.g., $HOME not set).
 const char *config_get_dir(void);
 
+// Load config.toml from the config directory. Call after config_init().
+// Silently skips if the file doesn't exist.
+void config_load(void);
+
+// Look up a string value. Returns the value or NULL if not found.
+// The returned string is owned by the config module — do not free.
+const char *config_get_string(const char *key);
+
+// Look up an integer value. Returns the value or default_val if not found or not a valid int.
+int config_get_int(const char *key, int default_val);
+
+// Look up a boolean value. Returns the value or default_val if not found.
+// Recognizes "true"/"false" (case-insensitive).
+int config_get_bool(const char *key, int default_val);
+
+// Load config from an explicit file path (for testing).
+void config_load_from(const char *path);
+
 // Reset config state. Only used by tests.
 void config_reset(void);
 

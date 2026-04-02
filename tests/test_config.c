@@ -142,6 +142,190 @@ static void test_config_init_existing_dir(void) {
     rmdir_if_exists(dir);
 }
 
+// Helper: write a string to a file
+static void write_file(const char *path, const char *content) {
+    FILE *fp = fopen(path, "w");
+    if (fp) {
+        fputs(content, fp);
+        fclose(fp);
+    }
+}
+
+
+// --- TOML parsing tests ---
+
+static void test_config_toml_basic(void) {
+    config_reset();
+    char tmpfile[] = "/tmp/splash_test_toml_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    ASSERT(fd >= 0);
+    close(fd);
+
+    write_file(tmpfile,
+        "# A comment\n"
+        "[prompt]\n"
+        "format = \"\\u@\\h \\w> \"\n"
+        "\n"
+        "[history]\n"
+        "max_size = 5000\n"
+        "save = true\n"
+    );
+
+    config_load_from(tmpfile);
+
+    ASSERT_STR_EQ(config_get_string("prompt.format"), "\\u@\\h \\w> ");
+    ASSERT_INT_EQ(config_get_int("history.max_size", 0), 5000);
+    ASSERT_INT_EQ(config_get_bool("history.save", 0), 1);
+
+    unlink(tmpfile);
+}
+
+static void test_config_toml_single_quotes(void) {
+    config_reset();
+    char tmpfile[] = "/tmp/splash_test_toml_sq_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    ASSERT(fd >= 0);
+    close(fd);
+
+    write_file(tmpfile,
+        "[prompt]\n"
+        "format = 'hello world'\n"
+    );
+
+    config_load_from(tmpfile);
+    ASSERT_STR_EQ(config_get_string("prompt.format"), "hello world");
+
+    unlink(tmpfile);
+}
+
+static void test_config_toml_bare_values(void) {
+    config_reset();
+    char tmpfile[] = "/tmp/splash_test_toml_bare_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    ASSERT(fd >= 0);
+    close(fd);
+
+    write_file(tmpfile,
+        "top_level = 42\n"
+        "[section]\n"
+        "flag = false\n"
+        "name = hello\n"
+    );
+
+    config_load_from(tmpfile);
+    ASSERT_INT_EQ(config_get_int("top_level", 0), 42);
+    ASSERT_INT_EQ(config_get_bool("section.flag", 1), 0);
+    ASSERT_STR_EQ(config_get_string("section.name"), "hello");
+
+    unlink(tmpfile);
+}
+
+static void test_config_toml_inline_comments(void) {
+    config_reset();
+    char tmpfile[] = "/tmp/splash_test_toml_ic_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    ASSERT(fd >= 0);
+    close(fd);
+
+    write_file(tmpfile,
+        "[test]\n"
+        "value = 100 # this is a comment\n"
+    );
+
+    config_load_from(tmpfile);
+    ASSERT_INT_EQ(config_get_int("test.value", 0), 100);
+
+    unlink(tmpfile);
+}
+
+static void test_config_toml_escape_sequences(void) {
+    config_reset();
+    char tmpfile[] = "/tmp/splash_test_toml_esc_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    ASSERT(fd >= 0);
+    close(fd);
+
+    write_file(tmpfile,
+        "[test]\n"
+        "tab = \"hello\\tworld\"\n"
+        "newline = \"line1\\nline2\"\n"
+        "quote = \"say \\\"hi\\\"\"\n"
+    );
+
+    config_load_from(tmpfile);
+    ASSERT_STR_EQ(config_get_string("test.tab"), "hello\tworld");
+    ASSERT_STR_EQ(config_get_string("test.newline"), "line1\nline2");
+    ASSERT_STR_EQ(config_get_string("test.quote"), "say \"hi\"");
+
+    unlink(tmpfile);
+}
+
+static void test_config_toml_duplicate_keys(void) {
+    config_reset();
+    char tmpfile[] = "/tmp/splash_test_toml_dup_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    ASSERT(fd >= 0);
+    close(fd);
+
+    write_file(tmpfile,
+        "[test]\n"
+        "val = \"first\"\n"
+        "val = \"second\"\n"
+    );
+
+    config_load_from(tmpfile);
+    ASSERT_STR_EQ(config_get_string("test.val"), "second");
+
+    unlink(tmpfile);
+}
+
+static void test_config_get_missing_key(void) {
+    config_reset();
+    ASSERT_NULL(config_get_string("nonexistent.key"));
+    ASSERT_INT_EQ(config_get_int("nonexistent.key", 42), 42);
+    ASSERT_INT_EQ(config_get_bool("nonexistent.key", 1), 1);
+}
+
+static void test_config_get_int_invalid(void) {
+    config_reset();
+    char tmpfile[] = "/tmp/splash_test_toml_inv_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    ASSERT(fd >= 0);
+    close(fd);
+
+    write_file(tmpfile,
+        "[test]\n"
+        "not_a_number = \"hello\"\n"
+    );
+
+    config_load_from(tmpfile);
+    ASSERT_INT_EQ(config_get_int("test.not_a_number", 99), 99);
+
+    unlink(tmpfile);
+}
+
+static void test_config_toml_bool_case_insensitive(void) {
+    config_reset();
+    char tmpfile[] = "/tmp/splash_test_toml_bool_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    ASSERT(fd >= 0);
+    close(fd);
+
+    write_file(tmpfile,
+        "[test]\n"
+        "a = True\n"
+        "b = FALSE\n"
+        "c = \"not_bool\"\n"
+    );
+
+    config_load_from(tmpfile);
+    ASSERT_INT_EQ(config_get_bool("test.a", 0), 1);
+    ASSERT_INT_EQ(config_get_bool("test.b", 1), 0);
+    ASSERT_INT_EQ(config_get_bool("test.c", 0), 0); // default when not a bool
+
+    unlink(tmpfile);
+}
+
 int main(void) {
     printf("test_config:\n");
 
@@ -151,11 +335,23 @@ int main(void) {
     const char *orig_xdg = getenv("XDG_CONFIG_HOME");
     char *saved_xdg = orig_xdg ? strdup(orig_xdg) : NULL;
 
+    // 9.1 tests
     test_config_init_creates_dir();
     test_config_init_xdg();
     test_config_init_xdg_empty();
     test_config_init_no_home();
     test_config_init_existing_dir();
+
+    // 9.2 tests
+    test_config_toml_basic();
+    test_config_toml_single_quotes();
+    test_config_toml_bare_values();
+    test_config_toml_inline_comments();
+    test_config_toml_escape_sequences();
+    test_config_toml_duplicate_keys();
+    test_config_get_missing_key();
+    test_config_get_int_invalid();
+    test_config_toml_bool_case_insensitive();
 
     // Restore original env
     if (saved_home) {

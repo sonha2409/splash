@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-04-02
 **Current milestone**: Milestone 9 — Configuration System
-**Last completed feature**: 9.1 XDG directory setup
+**Last completed feature**: 9.2 config.toml parsing
 
 ---
 
@@ -272,7 +272,7 @@ splash/
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
 | 9.1 | XDG directory setup | Create `~/.config/splash/` on first run if needed. | `DONE` | 2026-04-02 | XDG-compliant with $XDG_CONFIG_HOME support |
-| 9.2 | `config.toml` parsing | Minimal TOML parser. Sections: `[prompt]`, `[colors]`, `[keybindings]`, `[history]`. | `TODO` | | |
+| 9.2 | `config.toml` parsing | Minimal TOML parser. Sections: `[prompt]`, `[colors]`, `[keybindings]`, `[history]`. | `DONE` | 2026-04-02 | Hand-rolled parser, flat key-value store, 256 max entries |
 | 9.3 | `init.sh` | Sourced on startup for aliases, functions, env vars. | `TODO` | | |
 | 9.4 | `~/.shellrc` compat | If exists, source after `init.sh`. | `TODO` | | |
 | 9.5 | Variable prompt | `PROMPT` env var overrides default. Support escapes for cwd, user, host, git branch. | `TODO` | | |
