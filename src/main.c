@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "config.h"
 #include "editor.h"
 #include "executor.h"
 #include "expand.h"
@@ -163,13 +164,20 @@ int main(void) {
         editor_init();
     }
 
+    // Initialize config directory (~/.config/splash/ or $XDG_CONFIG_HOME/splash/)
+    config_init();
+
     // Auto-source config files (interactive only)
     if (interactive) {
+        const char *config_dir = config_get_dir();
+        if (config_dir) {
+            char path[1024];
+            snprintf(path, sizeof(path), "%s/init.sh", config_dir);
+            source_if_exists(path);
+        }
         const char *home = getenv("HOME");
         if (home) {
             char path[1024];
-            snprintf(path, sizeof(path), "%s/.config/splash/init.sh", home);
-            source_if_exists(path);
             snprintf(path, sizeof(path), "%s/.shellrc", home);
             source_if_exists(path);
         }

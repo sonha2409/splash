@@ -24,9 +24,9 @@ This is a **living feature log**. Each feature row has a status column:
 
 After completing a feature, update its status to `DONE`, fill in the date, and add a note if anything notable happened (edge cases found, design changes, etc.). This way each new session knows exactly where we left off.
 
-**Last updated**: 2026-03-30
+**Last updated**: 2026-04-02
 **Current milestone**: Milestone 9 — Configuration System
-**Last completed feature**: 8.12 Brace grouping
+**Last completed feature**: 9.1 XDG directory setup
 
 ---
 
@@ -271,7 +271,7 @@ splash/
 
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
-| 9.1 | XDG directory setup | Create `~/.config/splash/` on first run if needed. | `TODO` | | |
+| 9.1 | XDG directory setup | Create `~/.config/splash/` on first run if needed. | `DONE` | 2026-04-02 | XDG-compliant with $XDG_CONFIG_HOME support |
 | 9.2 | `config.toml` parsing | Minimal TOML parser. Sections: `[prompt]`, `[colors]`, `[keybindings]`, `[history]`. | `TODO` | | |
 | 9.3 | `init.sh` | Sourced on startup for aliases, functions, env vars. | `TODO` | | |
 | 9.4 | `~/.shellrc` compat | If exists, source after `init.sh`. | `TODO` | | |
