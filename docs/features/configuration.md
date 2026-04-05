@@ -93,3 +93,37 @@ Unit tests in `tests/test_config.c` (27 new assertions):
 - Missing key returns default
 - Invalid int returns default
 - Bool case-insensitive matching
+
+## 9.3 init.sh
+
+### Design
+
+On interactive startup, splash sources `$CONFIG_DIR/init.sh` if it exists. This allows users to define aliases, functions, and environment variables that persist for the session.
+
+### Implementation
+
+- `main.c` calls `source_if_exists(config_dir + "/init.sh")` after `config_init()` and `config_load()`, inside the `if (interactive)` block
+- Uses the existing `source` builtin which reads the file line by line and executes each line via `executor_execute_line()`
+- Only runs for interactive sessions (piped/scripted input skips sourcing, as is standard shell behavior)
+
+### Testing
+
+Integration tests in `tests/integration/test_m9_config.sh`:
+- Setting env vars via `export` in init.sh
+- Defining aliases in init.sh
+- Defining functions in init.sh
+
+## 9.4 ~/.shellrc Compatibility
+
+### Design
+
+After sourcing `init.sh`, splash also sources `~/.shellrc` if it exists. This provides a familiar location for users migrating from other shells.
+
+### Implementation
+
+- `main.c` sources `$HOME/.shellrc` after init.sh, inside the `if (interactive)` block
+- Uses `$HOME` directly (not the XDG config dir — this is a compatibility path)
+
+### Testing
+
+Integration test verifies env vars set in `.shellrc` are available after sourcing.
