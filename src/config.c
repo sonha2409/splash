@@ -1,9 +1,11 @@
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "config.h"
 
@@ -348,6 +350,193 @@ int config_get_bool(const char *key, int default_val) {
     if (strcasecmp(val, "true") == 0) return 1;
     if (strcasecmp(val, "false") == 0) return 0;
     return default_val;
+}
+
+// Read the current git branch from .git/HEAD, searching up from cwd.
+// Returns a newly allocated string or NULL if not in a git repo.
+static char *get_git_branch(void) {
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        return NULL;
+    }
+
+    // Walk up directories looking for .git/HEAD
+    char path[PATH_MAX];
+    char *dir = cwd;
+    for (;;) {
+        snprintf(path, sizeof(path), "%s/.git/HEAD", dir);
+        FILE *fp = fopen(path, "r");
+        if (fp) {
+            char line[256];
+            if (fgets(line, sizeof(line), fp)) {
+                fclose(fp);
+                // Strip newline
+                size_t len = strlen(line);
+                if (len > 0 && line[len - 1] == '\n') {
+                    line[len - 1] = '\0';
+                }
+                // "ref: refs/heads/branch_name"
+                const char *prefix = "ref: refs/heads/";
+                if (strncmp(line, prefix, strlen(prefix)) == 0) {
+                    return strdup(line + strlen(prefix));
+                }
+                // Detached HEAD — return short hash
+                if (len > 7) {
+                    char *hash = malloc(8);
+                    if (hash) {
+                        memcpy(hash, line, 7);
+                        hash[7] = '\0';
+                    }
+                    return hash;
+                }
+                return strdup(line);
+            }
+            fclose(fp);
+            return NULL;
+        }
+        // Move up one directory
+        char *slash = strrchr(dir, '/');
+        if (!slash || slash == dir) {
+            break;
+        }
+        *slash = '\0';
+    }
+    return NULL;
+}
+
+// Append a string to a dynamically growing buffer.
+static void buf_append(char **buf, size_t *len, size_t *cap,
+                       const char *str, size_t slen) {
+    while (*len + slen + 1 > *cap) {
+        *cap *= 2;
+        *buf = realloc(*buf, *cap);
+        if (!*buf) {
+            fprintf(stderr, "splash: realloc failed: out of memory\n");
+            abort();
+        }
+    }
+    memcpy(*buf + *len, str, slen);
+    *len += slen;
+    (*buf)[*len] = '\0';
+}
+
+char *config_expand_prompt(const char *format) {
+    size_t cap = 256;
+    size_t len = 0;
+    char *buf = malloc(cap);
+    if (!buf) {
+        fprintf(stderr, "splash: malloc failed: out of memory\n");
+        abort();
+    }
+    buf[0] = '\0';
+
+    const char *p = format;
+    while (*p) {
+        if (*p == '\\' && p[1]) {
+            p++;
+            switch (*p) {
+                case 'u': {
+                    const char *user = getenv("USER");
+                    if (!user) user = "?";
+                    buf_append(&buf, &len, &cap, user, strlen(user));
+                    break;
+                }
+                case 'h': {
+                    char hostname[256];
+                    if (gethostname(hostname, sizeof(hostname)) == 0) {
+                        // Truncate at first dot for short hostname
+                        char *dot = strchr(hostname, '.');
+                        if (dot) *dot = '\0';
+                        buf_append(&buf, &len, &cap,
+                                   hostname, strlen(hostname));
+                    } else {
+                        buf_append(&buf, &len, &cap, "?", 1);
+                    }
+                    break;
+                }
+                case 'w': {
+                    char cwd[PATH_MAX];
+                    if (getcwd(cwd, sizeof(cwd))) {
+                        const char *home = getenv("HOME");
+                        if (home && strncmp(cwd, home, strlen(home)) == 0 &&
+                            (cwd[strlen(home)] == '/' ||
+                             cwd[strlen(home)] == '\0')) {
+                            buf_append(&buf, &len, &cap, "~", 1);
+                            buf_append(&buf, &len, &cap,
+                                       cwd + strlen(home),
+                                       strlen(cwd + strlen(home)));
+                        } else {
+                            buf_append(&buf, &len, &cap, cwd, strlen(cwd));
+                        }
+                    } else {
+                        buf_append(&buf, &len, &cap, "?", 1);
+                    }
+                    break;
+                }
+                case 'W': {
+                    char cwd[PATH_MAX];
+                    if (getcwd(cwd, sizeof(cwd))) {
+                        char *base = strrchr(cwd, '/');
+                        if (base && base[1]) {
+                            buf_append(&buf, &len, &cap,
+                                       base + 1, strlen(base + 1));
+                        } else {
+                            buf_append(&buf, &len, &cap, "/", 1);
+                        }
+                    } else {
+                        buf_append(&buf, &len, &cap, "?", 1);
+                    }
+                    break;
+                }
+                case '$': {
+                    const char *ch = (geteuid() == 0) ? "#" : "$";
+                    buf_append(&buf, &len, &cap, ch, 1);
+                    break;
+                }
+                case 'e': {
+                    buf_append(&buf, &len, &cap, "\033", 1);
+                    break;
+                }
+                case 'g': {
+                    char *branch = get_git_branch();
+                    if (branch) {
+                        buf_append(&buf, &len, &cap,
+                                   branch, strlen(branch));
+                        free(branch);
+                    }
+                    break;
+                }
+                case '\\': {
+                    buf_append(&buf, &len, &cap, "\\", 1);
+                    break;
+                }
+                default: {
+                    // Unknown escape — keep as-is
+                    buf_append(&buf, &len, &cap, "\\", 1);
+                    buf_append(&buf, &len, &cap, p, 1);
+                    break;
+                }
+            }
+            p++;
+        } else {
+            buf_append(&buf, &len, &cap, p, 1);
+            p++;
+        }
+    }
+
+    return buf;
+}
+
+char *config_build_prompt(void) {
+    // Priority: $PROMPT env var > prompt.format config > default
+    const char *fmt = getenv("PROMPT");
+    if (!fmt || fmt[0] == '\0') {
+        fmt = config_get_string("prompt.format");
+    }
+    if (!fmt || fmt[0] == '\0') {
+        return strdup("splash> ");
+    }
+    return config_expand_prompt(fmt);
 }
 
 void config_reset(void) {

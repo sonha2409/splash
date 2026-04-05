@@ -127,3 +127,49 @@ After sourcing `init.sh`, splash also sources `~/.shellrc` if it exists. This pr
 ### Testing
 
 Integration test verifies env vars set in `.shellrc` are available after sourcing.
+
+## 9.5 Variable Prompt
+
+### Design
+
+The prompt is rebuilt before every `editor_readline()` call, supporting dynamic content like the current directory and git branch.
+
+**Priority order**:
+1. `$PROMPT` environment variable
+2. `prompt.format` in `config.toml`
+3. Default: `"splash> "`
+
+### Escape Sequences
+
+| Escape | Expansion |
+|--------|-----------|
+| `\u` | Username (`$USER`) |
+| `\h` | Short hostname (up to first `.`) |
+| `\w` | Current working directory (`~` for `$HOME`) |
+| `\W` | Basename of current working directory |
+| `\$` | `#` if root, `$` otherwise |
+| `\e` | ESC character (for ANSI color codes) |
+| `\g` | Current git branch (or short hash if detached) |
+| `\\` | Literal backslash |
+
+### Implementation
+
+- `config_expand_prompt(format)` — processes escape sequences, returns newly allocated string
+- `config_build_prompt()` — checks env/config/default priority, calls expand
+- `get_git_branch()` — walks up from cwd looking for `.git/HEAD`, parses `ref: refs/heads/...`
+- `buf_append()` — helper for dynamic string building
+
+### Example config.toml
+
+```toml
+[prompt]
+format = "\e[32m\u@\h\e[0m \e[34m\w\e[0m (\g) \$ "
+```
+
+### Testing
+
+Unit tests (15 assertions):
+- Literal passthrough, user expansion, cwd basename, `$` sign
+- Backslash escaping, ESC character
+- Git branch detection, home directory `~` substitution
+- `config_build_prompt()` with default, env var, and config.toml

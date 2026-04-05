@@ -28,6 +28,16 @@ int config_get_bool(const char *key, int default_val);
 // Load config from an explicit file path (for testing).
 void config_load_from(const char *path);
 
+// Expand a prompt format string with escape sequences.
+// Supported: \u (user), \h (host), \w (cwd with ~ for home), \W (basename of cwd),
+// \$ (# for root, $ otherwise), \e (ESC char), \g (git branch), \\ (literal backslash).
+// Returns a newly allocated string. Caller takes ownership.
+char *config_expand_prompt(const char *format);
+
+// Build the prompt string. Checks $PROMPT env var, then prompt.format config,
+// then falls back to "splash> ". Returns a newly allocated string. Caller frees.
+char *config_build_prompt(void);
+
 // Reset config state. Only used by tests.
 void config_reset(void);
 

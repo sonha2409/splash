@@ -190,7 +190,9 @@ int main(void) {
             jobs_notify();
         }
 
-        char *line = editor_readline("splash> ");
+        char *prompt = config_build_prompt();
+        char *line = editor_readline(prompt);
+        free(prompt);
         if (!line) {
             if (interactive) {
                 // Write newline since we're in raw mode

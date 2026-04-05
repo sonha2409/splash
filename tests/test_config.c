@@ -326,6 +326,127 @@ static void test_config_toml_bool_case_insensitive(void) {
     unlink(tmpfile);
 }
 
+// --- Prompt expansion tests ---
+
+static void test_prompt_expand_literal(void) {
+    config_reset();
+    char *result = config_expand_prompt("hello> ");
+    ASSERT_STR_EQ(result, "hello> ");
+    free(result);
+}
+
+static void test_prompt_expand_user(void) {
+    config_reset();
+    setenv("USER", "testuser", 1);
+    char *result = config_expand_prompt("\\u$ ");
+    ASSERT_STR_EQ(result, "testuser$ ");
+    free(result);
+}
+
+static void test_prompt_expand_cwd(void) {
+    config_reset();
+    // \W should give basename of cwd
+    char *result = config_expand_prompt("\\W> ");
+    ASSERT_NOT_NULL(result);
+    // Should not be empty
+    ASSERT(strlen(result) > 2);
+    free(result);
+}
+
+static void test_prompt_expand_dollar(void) {
+    config_reset();
+    char *result = config_expand_prompt("\\$ ");
+    // We're not root, so should be "$ "
+    ASSERT_STR_EQ(result, "$ ");
+    free(result);
+}
+
+static void test_prompt_expand_backslash(void) {
+    config_reset();
+    char *result = config_expand_prompt("a\\\\b");
+    ASSERT_STR_EQ(result, "a\\b");
+    free(result);
+}
+
+static void test_prompt_expand_escape(void) {
+    config_reset();
+    char *result = config_expand_prompt("\\e[32m>");
+    // \e should produce ESC (0x1b)
+    ASSERT(result[0] == '\033');
+    ASSERT_STR_EQ(result + 1, "[32m>");
+    free(result);
+}
+
+static void test_prompt_expand_git(void) {
+    config_reset();
+    // We're in a git repo, so \g should return something
+    char *result = config_expand_prompt("(\\g) ");
+    ASSERT_NOT_NULL(result);
+    // Should contain parens at minimum
+    ASSERT(result[0] == '(');
+    free(result);
+}
+
+static void test_prompt_expand_home_tilde(void) {
+    config_reset();
+    // cd to HOME, then \w should start with ~
+    const char *home = getenv("HOME");
+    if (home) {
+        char orig_cwd[1024];
+        if (getcwd(orig_cwd, sizeof(orig_cwd))) {
+            if (chdir(home) == 0) {
+                char *result = config_expand_prompt("\\w ");
+                ASSERT(result[0] == '~');
+                free(result);
+                chdir(orig_cwd);
+            }
+        }
+    }
+}
+
+static void test_config_build_prompt_default(void) {
+    config_reset();
+    unsetenv("PROMPT");
+    char *result = config_build_prompt();
+    ASSERT_STR_EQ(result, "splash> ");
+    free(result);
+}
+
+static void test_config_build_prompt_env(void) {
+    config_reset();
+    setenv("PROMPT", "\\u@\\h \\$ ", 1);
+    char *result = config_build_prompt();
+    ASSERT_NOT_NULL(result);
+    // Should start with username
+    const char *user = getenv("USER");
+    if (user) {
+        ASSERT(strncmp(result, user, strlen(user)) == 0);
+    }
+    free(result);
+    unsetenv("PROMPT");
+}
+
+static void test_config_build_prompt_config(void) {
+    config_reset();
+    unsetenv("PROMPT");
+    // Load a config with prompt.format
+    char tmpfile[] = "/tmp/splash_test_prompt_XXXXXX";
+    int fd = mkstemp(tmpfile);
+    ASSERT(fd >= 0);
+    close(fd);
+
+    write_file(tmpfile,
+        "[prompt]\n"
+        "format = \"custom> \"\n"
+    );
+    config_load_from(tmpfile);
+
+    char *result = config_build_prompt();
+    ASSERT_STR_EQ(result, "custom> ");
+    free(result);
+    unlink(tmpfile);
+}
+
 int main(void) {
     printf("test_config:\n");
 
@@ -352,6 +473,19 @@ int main(void) {
     test_config_get_missing_key();
     test_config_get_int_invalid();
     test_config_toml_bool_case_insensitive();
+
+    // 9.5 tests
+    test_prompt_expand_literal();
+    test_prompt_expand_user();
+    test_prompt_expand_cwd();
+    test_prompt_expand_dollar();
+    test_prompt_expand_backslash();
+    test_prompt_expand_escape();
+    test_prompt_expand_git();
+    test_prompt_expand_home_tilde();
+    test_config_build_prompt_default();
+    test_config_build_prompt_env();
+    test_config_build_prompt_config();
 
     // Restore original env
     if (saved_home) {
