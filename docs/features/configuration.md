@@ -173,3 +173,35 @@ Unit tests (15 assertions):
 - Backslash escaping, ESC character
 - Git branch detection, home directory `~` substitution
 - `config_build_prompt()` with default, env var, and config.toml
+
+## 9.6 ON_ERROR Env Var
+
+### Design
+
+When a command exits with a non-zero status in interactive mode, if the `ON_ERROR` environment variable is set and non-empty, its value is printed to stderr.
+
+### Implementation
+
+A 4-line check in `main.c` after `executor_execute_line()`:
+```c
+if (last_status != 0 && interactive) {
+    const char *on_error = getenv("ON_ERROR");
+    if (on_error && on_error[0] != '\0') {
+        fprintf(stderr, "%s\n", on_error);
+    }
+}
+```
+
+### Usage
+
+```sh
+export ON_ERROR="Command failed!"
+# or with color:
+export ON_ERROR=$'\e[31m✗ Command failed\e[0m'
+```
+
+### Edge Cases
+
+- Only in interactive mode (non-interactive scripts don't trigger it)
+- Empty `ON_ERROR` is treated as unset (no message)
+- Output goes to stderr to avoid interfering with pipelines

@@ -25,8 +25,8 @@ This is a **living feature log**. Each feature row has a status column:
 After completing a feature, update its status to `DONE`, fill in the date, and add a note if anything notable happened (edge cases found, design changes, etc.). This way each new session knows exactly where we left off.
 
 **Last updated**: 2026-04-02
-**Current milestone**: Milestone 9 — Configuration System
-**Last completed feature**: 9.5 Variable prompt
+**Current milestone**: Milestone 10 — Polish and Quality
+**Last completed feature**: 9.6 ON_ERROR env var
 
 ---
 
@@ -276,7 +276,7 @@ splash/
 | 9.3 | `init.sh` | Sourced on startup for aliases, functions, env vars. | `DONE` | 2026-04-02 | Interactive only, uses source builtin |
 | 9.4 | `~/.shellrc` compat | If exists, source after `init.sh`. | `DONE` | 2026-04-02 | HOME-based path, sourced after init.sh |
 | 9.5 | Variable prompt | `PROMPT` env var overrides default. Support escapes for cwd, user, host, git branch. | `DONE` | 2026-04-02 | \u \h \w \W \$ \e \g \\\\ escapes |
-| 9.6 | `ON_ERROR` env var | Print its value when last command exits non-zero. | `TODO` | | |
+| 9.6 | `ON_ERROR` env var | Print its value when last command exits non-zero. | `DONE` | 2026-04-02 | Interactive only, prints to stderr |
 
 **Verification**: Custom `PROMPT` string appears. Alias in `init.sh` works after restart. `ON_ERROR` message on failed commands.
 

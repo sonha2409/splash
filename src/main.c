@@ -222,6 +222,14 @@ int main(void) {
         history_add(line);
         last_status = executor_execute_line(line);
         free(line);
+
+        // ON_ERROR: print message when last command failed
+        if (last_status != 0 && interactive) {
+            const char *on_error = getenv("ON_ERROR");
+            if (on_error && on_error[0] != '\0') {
+                fprintf(stderr, "%s\n", on_error);
+            }
+        }
     }
 
     functions_free_all();
