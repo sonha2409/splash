@@ -230,7 +230,10 @@ static int execute_structured_pipeline(Pipeline *pl, const char *command_str) {
             // still owns the terminal.
             int devnull = open("/dev/null", O_RDONLY);
             if (devnull >= 0) {
-                dup2(devnull, STDIN_FILENO);
+                if (dup2(devnull, STDIN_FILENO) == -1) {
+                    close(devnull);
+                    _exit(1);
+                }
                 close(devnull);
             }
 
@@ -287,7 +290,9 @@ static int execute_structured_pipeline(Pipeline *pl, const char *command_str) {
         stage = builtin_create_stage(src_cmd, NULL);
 
         if (saved_stdin >= 0) {
-            dup2(saved_stdin, STDIN_FILENO);
+            if (dup2(saved_stdin, STDIN_FILENO) == -1) {
+                fprintf(stderr, "splash: restore stdin: %s\n", strerror(errno));
+            }
             close(saved_stdin);
         }
 
@@ -414,7 +419,9 @@ static int execute_structured_pipeline(Pipeline *pl, const char *command_str) {
     int status = execute_pipeline_impl(sub, command_str);
 
     // Restore stdin
-    dup2(saved_stdin, STDIN_FILENO);
+    if (dup2(saved_stdin, STDIN_FILENO) == -1) {
+        fprintf(stderr, "splash: restore stdin: %s\n", strerror(errno));
+    }
     close(saved_stdin);
 
     // Null out the borrowed commands so sub pipeline doesn't free them
@@ -642,21 +649,33 @@ int executor_execute(Pipeline *pl, const char *command_str) {
             pipeline_stage_drain(stage, stdout);
             // Restore stdin/stdout if we redirected
             if (saved_stdin >= 0) {
-                dup2(saved_stdin, STDIN_FILENO);
+                if (dup2(saved_stdin, STDIN_FILENO) == -1) {
+                    fprintf(stderr, "splash: restore stdin: %s\n",
+                            strerror(errno));
+                }
                 close(saved_stdin);
             }
             if (saved_stdout >= 0) {
-                dup2(saved_stdout, STDOUT_FILENO);
+                if (dup2(saved_stdout, STDOUT_FILENO) == -1) {
+                    fprintf(stderr, "splash: restore stdout: %s\n",
+                            strerror(errno));
+                }
                 close(saved_stdout);
             }
             return 0;
         }
         if (saved_stdin >= 0) {
-            dup2(saved_stdin, STDIN_FILENO);
+            if (dup2(saved_stdin, STDIN_FILENO) == -1) {
+                fprintf(stderr, "splash: restore stdin: %s\n",
+                        strerror(errno));
+            }
             close(saved_stdin);
         }
         if (saved_stdout >= 0) {
-            dup2(saved_stdout, STDOUT_FILENO);
+            if (dup2(saved_stdout, STDOUT_FILENO) == -1) {
+                fprintf(stderr, "splash: restore stdout: %s\n",
+                        strerror(errno));
+            }
             close(saved_stdout);
         }
         // Fall through to normal execution on failure

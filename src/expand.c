@@ -329,7 +329,10 @@ char *expand_command_subst(const char *cmd) {
         // (isatty(STDIN_FILENO) will return false, preventing tcsetpgrp)
         int devnull = open("/dev/null", O_RDONLY);
         if (devnull >= 0) {
-            dup2(devnull, STDIN_FILENO);
+            if (dup2(devnull, STDIN_FILENO) == -1) {
+                close(devnull);
+                _exit(1);
+            }
             close(devnull);
         }
 

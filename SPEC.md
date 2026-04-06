@@ -24,9 +24,9 @@ This is a **living feature log**. Each feature row has a status column:
 
 After completing a feature, update its status to `DONE`, fill in the date, and add a note if anything notable happened (edge cases found, design changes, etc.). This way each new session knows exactly where we left off.
 
-**Last updated**: 2026-04-02
+**Last updated**: 2026-04-05
 **Current milestone**: Milestone 10 — Polish and Quality
-**Last completed feature**: 9.6 ON_ERROR env var
+**Last completed feature**: 10.2 File descriptor leak audit
 
 ---
 
@@ -288,8 +288,8 @@ splash/
 
 | ID | Feature | Description | Status | Date | Notes |
 |----|---------|-------------|--------|------|-------|
-| 10.1 | Memory leak audit | Full test suite under ASan/LSan. Zero tolerated leaks. | `TODO` | | |
-| 10.2 | File descriptor leak audit | Verify no leaked fds after pipes/redirections via `/dev/fd` or `lsof`. | `TODO` | | |
+| 10.1 | Memory leak audit | Full test suite under ASan/LSan. Zero tolerated leaks. | `DONE` | 2026-04-05 | 1070 unit tests pass clean under ASan+UBSan, zero sanitizer warnings across all integration tests |
+| 10.2 | File descriptor leak audit | Verify no leaked fds after pipes/redirections via `/dev/fd` or `lsof`. | `DONE` | 2026-04-05 | Audited all open/pipe/dup/dup2 calls; fixed 8 unchecked dup2 returns in executor.c and expand.c; verified only fds 0-2 open after pipes/redirects |
 | 10.3 | Error messages | Every error path prints helpful message with context. No bare "error". | `TODO` | | |
 | 10.4 | Integration test suite | Shell scripts testing every feature end-to-end, comparing output. | `TODO` | | |
 | 10.5 | Unit tests | C tests for tokenizer, parser, expander, value types. | `TODO` | | |
