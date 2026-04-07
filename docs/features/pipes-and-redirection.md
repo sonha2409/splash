@@ -40,6 +40,17 @@ Added `Redirection` struct to `SimpleCommand` — a dynamic array of `{type, tar
 
 **Executor**: `apply_redirections()` runs in child process before `execvp()`. For pipelines, redirections apply after pipe wiring — so `ls 2> err.txt | grep foo > out.txt` correctly redirects stderr of `ls` and stdout of `grep` while pipes still connect stdout of `ls` to stdin of `grep`.
 
+**Parent-process builtins**: builtins (regular and structured) run in the parent shell, not a forked child, so they cannot reuse the child-side `apply_redirections()` directly. Instead, the executor wraps every single-command builtin invocation in a save/restore pair:
+
+```c
+static int  apply_parent_redirections(SimpleCommand *cmd, int saved[3]);
+static void restore_parent_stdio(int saved[3]);
+```
+
+`apply_parent_redirections()` `dup`s the current stdin/stdout/stderr into `saved[]` and then runs the same `apply_redirections()` used by external commands. After the builtin returns (success or failure), `restore_parent_stdio()` flushes stdio buffers and `dup2`s the saved fds back. This means `printenv > file`, `history > file`, `ls > file`, `ls /missing 2> err`, etc. all behave the same way as the equivalent redirection on an external command.
+
+Before this fix, only `from-csv`/`from-json`/`from-lines` structured sources applied redirections, and the regular-builtin path applied none — so most builtins silently dropped any attached redirection.
+
 File permissions: new files created with mode `0644`.
 
 ### isatty() Check (2.9)

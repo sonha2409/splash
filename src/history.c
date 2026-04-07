@@ -103,10 +103,15 @@ static void history_append(const char *line) {
     fclose(f);
 }
 
-void history_init(void) {
+void history_init(int interactive) {
     num_entries = 0;
-    init_history_path();
-    history_load();
+    if (interactive) {
+        init_history_path();
+        history_load();
+    }
+    // Non-interactive mode: leave history_path_valid = 0 so that
+    // history_add() does not append to disk, and do not load existing
+    // entries. history remains usable in-memory for the session.
 }
 
 void history_add(const char *line) {

@@ -26,7 +26,7 @@ After completing a feature, update its status to `DONE`, fill in the date, and a
 
 **Last updated**: 2026-04-07
 **Current milestone**: Milestone 10 — Polish and Quality
-**Last completed feature**: 10.3 Error messages audit
+**Last completed feature**: 10.4 Integration test suite
 
 ---
 
@@ -291,7 +291,7 @@ splash/
 | 10.1 | Memory leak audit | Full test suite under ASan/LSan. Zero tolerated leaks. | `DONE` | 2026-04-05 | 1070 unit tests pass clean under ASan+UBSan, zero sanitizer warnings across all integration tests |
 | 10.2 | File descriptor leak audit | Verify no leaked fds after pipes/redirections via `/dev/fd` or `lsof`. | `DONE` | 2026-04-05 | Audited all open/pipe/dup/dup2 calls; fixed 8 unchecked dup2 returns in executor.c and expand.c; verified only fds 0-2 open after pipes/redirects |
 | 10.3 | Error messages | Every error path prints helpful message with context. No bare "error". | `DONE` | 2026-04-07 | Audited all syscall/alloc paths; fixed unchecked tcsetpgrp/setpgid/tcsetattr/dup2/strdup/realloc/write across executor.c, builtins.c, editor.c, config.c, main.c, expand.c, history.c |
-| 10.4 | Integration test suite | Shell scripts testing every feature end-to-end, comparing output. | `TODO` | | |
+| 10.4 | Integration test suite | Shell scripts testing every feature end-to-end, comparing output. | `DONE` | 2026-04-07 | Added `make integration-test` + `make test-all`; 5 new scripts (m1 basics, m8 while, case, subshell, brace group); fixed 3 pre-existing failures (m5 startup mkdir pollution → config_init now interactive-only; m4 history cross-run contamination → history_init takes interactive flag; m2/builtin redirects → new apply_parent_redirections helper covers all single-command builtins). 22/22 integration scripts green under release and ASan/UBSan builds. |
 | 10.5 | Unit tests | C tests for tokenizer, parser, expander, value types. | `TODO` | | |
 | 10.6 | Fuzz testing | Fuzz tokenizer + parser with random/malformed input. No crashes, no hangs. | `TODO` | | |
 | 10.7 | Ctrl-? help | Display available keybindings and commands. | `TODO` | | |

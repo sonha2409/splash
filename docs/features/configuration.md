@@ -19,7 +19,7 @@ Follows the [XDG Base Directory Specification](https://specifications.freedeskto
 
 - **Module**: `src/config.c` / `src/config.h`
 - **Static state**: `config_dir[1024]` stores the resolved path, `config_dir_valid` tracks initialization success
-- `config_init()` — resolves the config directory path and creates it via `mkdir(path, 0755)`. Called once from `main()` before config file sourcing.
+- `config_init()` — resolves the config directory path and creates it via `mkdir(path, 0755)`. Called once from `main()` **only when `isatty(0)` is true**. Non-interactive splash (piped scripts, integration tests) deliberately does not create files in `$HOME` / `$XDG_CONFIG_HOME` so that running splash in a pipeline never pollutes the user's environment. The XDG dir is only ever materialized by an interactive session.
 - `config_get_dir()` — returns the resolved path (or NULL on failure). Used by `main.c` to locate `init.sh`.
 - `config_reset()` — clears state for unit testing.
 
@@ -33,7 +33,7 @@ Follows the [XDG Base Directory Specification](https://specifications.freedeskto
 
 ### Integration with main.c
 
-`main.c` calls `config_init()` early, then uses `config_get_dir()` to build the path to `init.sh` instead of hardcoding `$HOME/.config/splash/`. The `~/.shellrc` sourcing remains HOME-based (it's a compatibility feature, not XDG).
+`main.c` calls `config_init()` and `config_load()` from inside the `if (interactive)` block (alongside `editor_init()` and the `init.sh` / `~/.shellrc` sourcing), then uses `config_get_dir()` to build the path to `init.sh` instead of hardcoding `$HOME/.config/splash/`. The `~/.shellrc` sourcing remains HOME-based (it's a compatibility feature, not XDG).
 
 ### Testing
 

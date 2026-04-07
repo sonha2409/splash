@@ -1,8 +1,12 @@
 #ifndef SPLASH_HISTORY_H
 #define SPLASH_HISTORY_H
 
-// Initialize the history buffer and load persistent history from disk.
-void history_init(void);
+// Initialize the history buffer. When interactive is non-zero, also
+// loads persistent history from disk and enables appending to the
+// history file on each history_add(). When interactive is zero,
+// history stays purely in-memory for the session (used by scripts
+// and tests so they don't read or pollute the user's history file).
+void history_init(int interactive);
 
 // Add a line to history. The string is copied.
 // Also appends to the persistent history file.

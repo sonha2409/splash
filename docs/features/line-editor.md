@@ -99,8 +99,9 @@ When the user first presses Up, the current typed text is saved in `saved_line`.
 
 History is persisted to `~/.config/splash/history` (one command per line). The directory is created automatically if missing.
 
-- `history_load()`: Called during `history_init()`. Reads the file line by line.
-- `history_append()`: Called from `history_add()`. Appends a single line (avoids rewriting the whole file).
+- `history_init(int interactive)`: Called from `main()`. When `interactive` is non-zero, calls `init_history_path()` and `history_load()` to bring up persistence. When `interactive` is zero (piped scripts, integration tests), in-memory history still works for the session but no entries are loaded from disk and `history_add()` does **not** append to the file. This isolates test runs from the user's real history.
+- `history_load()`: Called from `history_init()` only when interactive. Reads the file line by line.
+- `history_append()`: Called from `history_add()`. Appends a single line (avoids rewriting the whole file). No-op when `history_path_valid` is false (i.e. non-interactive mode).
 - Dedup: consecutive duplicates are skipped both in-memory and on disk.
 - Max entries: 1000. When full, oldest entries are dropped from memory (file grows unbounded but is only loaded up to HISTORY_MAX on startup).
 

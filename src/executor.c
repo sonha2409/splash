@@ -140,6 +140,66 @@ static int apply_redirections(SimpleCommand *cmd) {
     return 0;
 }
 
+// Save the current stdin/stdout/stderr fds and apply the command's
+// redirections in-place (used when running a builtin in the parent
+// process so the builtin's output goes to the redirected target).
+// On success returns 0 and fills saved[3] with dup'd originals; the
+// caller must later pass them to restore_parent_stdio() to restore.
+// On failure returns -1, prints an error, and restores any fds that
+// were already redirected.
+static int apply_parent_redirections(SimpleCommand *cmd, int saved[3]) {
+    saved[0] = saved[1] = saved[2] = -1;
+    if (cmd->num_redirects == 0) {
+        return 0;
+    }
+    saved[0] = dup(STDIN_FILENO);
+    saved[1] = dup(STDOUT_FILENO);
+    saved[2] = dup(STDERR_FILENO);
+    if (saved[0] == -1 || saved[1] == -1 || saved[2] == -1) {
+        fprintf(stderr, "splash: dup stdio: %s\n", strerror(errno));
+        for (int i = 0; i < 3; i++) {
+            if (saved[i] != -1) close(saved[i]);
+            saved[i] = -1;
+        }
+        return -1;
+    }
+    if (apply_redirections(cmd) == -1) {
+        // Restore on failure so the parent isn't left in a broken state.
+        if (dup2(saved[0], STDIN_FILENO) == -1 ||
+            dup2(saved[1], STDOUT_FILENO) == -1 ||
+            dup2(saved[2], STDERR_FILENO) == -1) {
+            fprintf(stderr, "splash: restore stdio after failed redirect: %s\n",
+                    strerror(errno));
+        }
+        for (int i = 0; i < 3; i++) {
+            close(saved[i]);
+            saved[i] = -1;
+        }
+        return -1;
+    }
+    return 0;
+}
+
+// Restore the three fds saved by apply_parent_redirections() and close
+// the dup'd originals. Safe to call even if no redirections were applied
+// (saved[i] == -1 means "nothing to restore for this fd").
+static void restore_parent_stdio(int saved[3]) {
+    fflush(stdout);
+    fflush(stderr);
+    static const int targets[3] = { STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO };
+    for (int i = 0; i < 3; i++) {
+        if (saved[i] == -1) {
+            continue;
+        }
+        if (dup2(saved[i], targets[i]) == -1) {
+            fprintf(stderr, "splash: restore fd %d: %s\n",
+                    targets[i], strerror(errno));
+        }
+        close(saved[i]);
+        saved[i] = -1;
+    }
+}
+
 // Check if a pipeline contains any structured pipes (|>).
 static int pipeline_has_structured(Pipeline *pl) {
     for (int i = 0; i < pl->num_commands - 1; i++) {
@@ -653,54 +713,20 @@ int executor_execute(Pipeline *pl, const char *command_str) {
         !functions_lookup(pl->commands[0]->argv[0])) {
         SimpleCommand *cmd = pl->commands[0];
 
-        // For from-* sources, apply redirections so they can read from
-        // redirected stdin (e.g., from-csv < file.csv).
-        int saved_stdin = -1;
-        int saved_stdout = -1;
-        if (builtin_is_from_source(cmd->argv[0]) && cmd->num_redirects > 0) {
-            saved_stdin = dup(STDIN_FILENO);
-            saved_stdout = dup(STDOUT_FILENO);
-            if (apply_redirections(cmd) == -1) {
-                if (saved_stdin >= 0) close(saved_stdin);
-                if (saved_stdout >= 0) close(saved_stdout);
-                return 1;
-            }
+        // Apply redirections in the parent so the structured builtin's
+        // output (and any error messages) go to the redirected target.
+        int saved[3] = { -1, -1, -1 };
+        if (apply_parent_redirections(cmd, saved) == -1) {
+            return 1;
         }
 
         PipelineStage *stage = builtin_create_stage(cmd, NULL);
         if (stage) {
             pipeline_stage_drain(stage, stdout);
-            // Restore stdin/stdout if we redirected
-            if (saved_stdin >= 0) {
-                if (dup2(saved_stdin, STDIN_FILENO) == -1) {
-                    fprintf(stderr, "splash: restore stdin: %s\n",
-                            strerror(errno));
-                }
-                close(saved_stdin);
-            }
-            if (saved_stdout >= 0) {
-                if (dup2(saved_stdout, STDOUT_FILENO) == -1) {
-                    fprintf(stderr, "splash: restore stdout: %s\n",
-                            strerror(errno));
-                }
-                close(saved_stdout);
-            }
+            restore_parent_stdio(saved);
             return 0;
         }
-        if (saved_stdin >= 0) {
-            if (dup2(saved_stdin, STDIN_FILENO) == -1) {
-                fprintf(stderr, "splash: restore stdin: %s\n",
-                        strerror(errno));
-            }
-            close(saved_stdin);
-        }
-        if (saved_stdout >= 0) {
-            if (dup2(saved_stdout, STDOUT_FILENO) == -1) {
-                fprintf(stderr, "splash: restore stdout: %s\n",
-                        strerror(errno));
-            }
-            close(saved_stdout);
-        }
+        restore_parent_stdio(saved);
         // Fall through to normal execution on failure
     }
 
@@ -708,7 +734,13 @@ int executor_execute(Pipeline *pl, const char *command_str) {
     if (pl->num_commands == 1 && !pl->background) {
         SimpleCommand *cmd = pl->commands[0];
         if (builtin_is_builtin(cmd->argv[0])) {
-            return builtin_execute(cmd);
+            int saved[3] = { -1, -1, -1 };
+            if (apply_parent_redirections(cmd, saved) == -1) {
+                return 1;
+            }
+            int status = builtin_execute(cmd);
+            restore_parent_stdio(saved);
+            return status;
         }
     }
 

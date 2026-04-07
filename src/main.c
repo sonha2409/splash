@@ -161,16 +161,17 @@ int main(void) {
     }
 
     jobs_init();
-    history_init();
+    history_init(interactive);
 
     // Initialize line editor (saves terminal state, registers atexit)
+    // and load user config. Both are interactive-only: non-interactive
+    // splash (e.g. piped scripts, tests) must not create files in $HOME
+    // or read persisted config/history that could contaminate output.
     if (interactive) {
         editor_init();
+        config_init();
+        config_load();
     }
-
-    // Initialize config directory and load config.toml
-    config_init();
-    config_load();
 
     // Auto-source config files (interactive only)
     if (interactive) {

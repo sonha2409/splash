@@ -20,7 +20,7 @@ DEBUG_LIB_OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%-debug.o,$(LIB_SRCS))
 TEST_SRCS = $(wildcard $(TEST_DIR)/test_*.c)
 TEST_BINS = $(patsubst $(TEST_DIR)/%.c,$(BUILD_DIR)/%,$(TEST_SRCS))
 
-.PHONY: all debug test clean
+.PHONY: all debug test integration-test test-all clean
 
 all: $(TARGET)
 
@@ -58,6 +58,27 @@ test: $(TEST_BINS)
 	else \
 		echo "=== ALL TESTS PASSED ==="; \
 	fi
+
+INTEGRATION_DIR = $(TEST_DIR)/integration
+INTEGRATION_TESTS = $(sort $(wildcard $(INTEGRATION_DIR)/test_*.sh))
+
+integration-test: $(TARGET)
+	@echo "=== Running integration tests ==="
+	@failed=0; total=0; \
+	for t in $(INTEGRATION_TESTS); do \
+		total=$$((total + 1)); \
+		echo "--- $$t ---"; \
+		bash $$t || failed=$$((failed + 1)); \
+	done; \
+	echo ""; \
+	if [ $$failed -ne 0 ]; then \
+		echo "=== INTEGRATION: $$failed/$$total SCRIPTS FAILED ==="; \
+		exit 1; \
+	else \
+		echo "=== INTEGRATION: ALL $$total SCRIPTS PASSED ==="; \
+	fi
+
+test-all: test integration-test
 
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET) $(DEBUG_TARGET)
