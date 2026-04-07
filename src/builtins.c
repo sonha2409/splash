@@ -94,7 +94,9 @@ static int wait_for_fg_job(Job *j) {
 
     // Give the job the terminal
     if (interactive) {
-        tcsetpgrp(STDIN_FILENO, j->pgid);
+        if (tcsetpgrp(STDIN_FILENO, j->pgid) == -1 && errno != ENOTTY) {
+            fprintf(stderr, "splash: fg: tcsetpgrp: %s\n", strerror(errno));
+        }
     }
 
     // If stopped, continue it
@@ -120,7 +122,12 @@ static int wait_for_fg_job(Job *j) {
                 fprintf(stderr, "\n[%d] stopped\t%s\n", j->id, j->command);
                 // Reclaim terminal for shell
                 if (interactive) {
-                    tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid());
+                    if (tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid()) == -1
+                        && errno != ENOTTY) {
+                        fprintf(stderr,
+                                "splash: fg: tcsetpgrp (reclaim): %s\n",
+                                strerror(errno));
+                    }
                 }
                 return 128 + WSTOPSIG(status);
             }
@@ -136,7 +143,11 @@ static int wait_for_fg_job(Job *j) {
 
     // Reclaim terminal for shell
     if (interactive) {
-        tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid());
+        if (tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid()) == -1
+            && errno != ENOTTY) {
+            fprintf(stderr, "splash: fg: tcsetpgrp (reclaim): %s\n",
+                    strerror(errno));
+        }
     }
 
     j->status = JOB_DONE;

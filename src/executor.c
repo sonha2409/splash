@@ -46,7 +46,10 @@ static int apply_redirections(SimpleCommand *cmd) {
             size_t blen = strlen(body);
             if (blen > 0) {
                 ssize_t w = write(hd_pipe[1], body, blen);
-                (void)w;
+                if (w == -1) {
+                    fprintf(stderr, "splash: heredoc write: %s\n",
+                            strerror(errno));
+                }
             }
             close(hd_pipe[1]);
             if (dup2(hd_pipe[0], STDIN_FILENO) == -1) {
@@ -490,7 +493,11 @@ static int execute_pipeline_impl(Pipeline *pl, const char *command_str) {
             // Set process group: first child creates, others join
             if (interactive) {
                 pid_t child_pgid = (i == 0) ? 0 : pgid;
-                setpgid(0, child_pgid);
+                if (setpgid(0, child_pgid) == -1 && errno != EACCES
+                    && errno != EPERM) {
+                    fprintf(stderr, "splash: setpgid (child): %s\n",
+                            strerror(errno));
+                }
             }
 
             // Reset signals to default before exec
@@ -545,7 +552,11 @@ static int execute_pipeline_impl(Pipeline *pl, const char *command_str) {
             pgid = pids[0];
         }
         if (interactive) {
-            setpgid(pids[i], pgid);
+            if (setpgid(pids[i], pgid) == -1 && errno != EACCES
+                && errno != EPERM && errno != ESRCH) {
+                fprintf(stderr, "splash: setpgid (parent): %s\n",
+                        strerror(errno));
+            }
         }
     }
 
@@ -570,7 +581,10 @@ static int execute_pipeline_impl(Pipeline *pl, const char *command_str) {
 
     // Foreground: give the job the terminal and wait
     if (interactive) {
-        tcsetpgrp(STDIN_FILENO, pgid);
+        if (tcsetpgrp(STDIN_FILENO, pgid) == -1 && errno != ENOTTY) {
+            fprintf(stderr, "splash: tcsetpgrp (foreground): %s\n",
+                    strerror(errno));
+        }
     }
 
     int last_status = 0;
@@ -591,7 +605,12 @@ static int execute_pipeline_impl(Pipeline *pl, const char *command_str) {
                 }
                 // Reclaim terminal
                 if (interactive) {
-                    tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid());
+                    if (tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid()) == -1
+                        && errno != ENOTTY) {
+                        fprintf(stderr,
+                                "splash: tcsetpgrp (reclaim after stop): %s\n",
+                                strerror(errno));
+                    }
                 }
                 free(pids);
                 return 128 + WSTOPSIG(status);
@@ -608,7 +627,11 @@ static int execute_pipeline_impl(Pipeline *pl, const char *command_str) {
 
     // Reclaim terminal for shell
     if (interactive) {
-        tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid());
+        if (tcsetpgrp(STDIN_FILENO, jobs_get_shell_pgid()) == -1
+            && errno != ENOTTY) {
+            fprintf(stderr, "splash: tcsetpgrp (reclaim): %s\n",
+                    strerror(errno));
+        }
     }
 
     // Remove completed foreground job

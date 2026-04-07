@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -150,7 +151,10 @@ int main(void) {
             // May already be group leader — not an error
         }
         jobs_set_shell_pgid(shell_pgid);
-        tcsetpgrp(STDIN_FILENO, shell_pgid);
+        if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1 && errno != ENOTTY) {
+            fprintf(stderr, "splash: tcsetpgrp (init): %s\n",
+                    strerror(errno));
+        }
 
         // Set up signal handlers
         signals_init();

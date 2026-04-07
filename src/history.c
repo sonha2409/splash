@@ -93,9 +93,13 @@ static void history_append(const char *line) {
 
     FILE *f = fopen(history_path, "a");
     if (!f) {
+        fprintf(stderr, "splash: history: open '%s': %s\n",
+                history_path, strerror(errno));
         return;
     }
-    fprintf(f, "%s\n", line);
+    if (fprintf(f, "%s\n", line) < 0) {
+        fprintf(stderr, "splash: history: write: %s\n", strerror(errno));
+    }
     fclose(f);
 }
 

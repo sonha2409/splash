@@ -95,6 +95,9 @@ static void config_set(const char *key, const char *value) {
         if (strcmp(config_entries[i].key, key) == 0) {
             free(config_entries[i].value);
             config_entries[i].value = strdup(value);
+            if (!config_entries[i].value) {
+                fprintf(stderr, "splash: config: out of memory\n");
+            }
             return;
         }
     }
@@ -103,8 +106,16 @@ static void config_set(const char *key, const char *value) {
                 CONFIG_MAX_ENTRIES);
         return;
     }
-    config_entries[config_count].key = strdup(key);
-    config_entries[config_count].value = strdup(value);
+    char *kdup = strdup(key);
+    char *vdup = strdup(value);
+    if (!kdup || !vdup) {
+        fprintf(stderr, "splash: config: out of memory\n");
+        free(kdup);
+        free(vdup);
+        return;
+    }
+    config_entries[config_count].key = kdup;
+    config_entries[config_count].value = vdup;
     config_count++;
 }
 

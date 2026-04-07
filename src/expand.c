@@ -330,6 +330,8 @@ char *expand_command_subst(const char *cmd) {
         int devnull = open("/dev/null", O_RDONLY);
         if (devnull >= 0) {
             if (dup2(devnull, STDIN_FILENO) == -1) {
+                fprintf(stderr, "splash: command substitution: dup2 /dev/null: %s\n",
+                        strerror(errno));
                 close(devnull);
                 _exit(1);
             }
@@ -337,6 +339,8 @@ char *expand_command_subst(const char *cmd) {
         }
 
         if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+            fprintf(stderr, "splash: command substitution: dup2 stdout: %s\n",
+                    strerror(errno));
             close(pipefd[1]);
             _exit(1);
         }

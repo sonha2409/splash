@@ -74,7 +74,10 @@ static void leave_raw_mode(void) {
     if (!raw_mode_enabled) {
         return;
     }
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1) {
+        fprintf(stderr, "splash: tcsetattr (restore): %s\n",
+                strerror(errno));
+    }
     raw_mode_enabled = 0;
     prev_extra_rows = 0;
 }
@@ -344,7 +347,10 @@ static SearchResult do_reverse_search(char **out_line) {
             // Escape — could be bare escape or escape sequence
             // Try to read more to consume any escape sequence
             struct termios tmp;
-            tcgetattr(STDIN_FILENO, &tmp);
+            if (tcgetattr(STDIN_FILENO, &tmp) == -1) {
+                *out_line = NULL;
+                return SEARCH_CANCEL;
+            }
             struct termios nonblock = tmp;
             nonblock.c_cc[VMIN] = 0;
             nonblock.c_cc[VTIME] = 1;  // 100ms timeout
@@ -742,15 +748,23 @@ char *editor_readline(const char *prompt) {
                             free(saved_line);
                             buf[len] = '\0';
                             saved_line = strdup(buf);
+                            if (!saved_line) {
+                                saved_line = strdup("");
+                            }
                         }
                         hist_index--;
                         const char *entry = history_get(hist_index);
                         if (entry) {
                             size_t elen = strlen(entry);
                             if (elen + 1 > cap) {
-                                cap = elen + 1;
-                                char *nb = realloc(buf, cap);
-                                if (nb) buf = nb;
+                                size_t newcap = elen + 1;
+                                char *nb = realloc(buf, newcap);
+                                if (nb) {
+                                    buf = nb;
+                                    cap = newcap;
+                                } else {
+                                    elen = cap - 1;
+                                }
                             }
                             memcpy(buf, entry, elen);
                             len = elen;
@@ -772,9 +786,14 @@ char *editor_readline(const char *prompt) {
                         if (entry) {
                             size_t elen = strlen(entry);
                             if (elen + 1 > cap) {
-                                cap = elen + 1;
-                                char *nb = realloc(buf, cap);
-                                if (nb) buf = nb;
+                                size_t newcap = elen + 1;
+                                char *nb = realloc(buf, newcap);
+                                if (nb) {
+                                    buf = nb;
+                                    cap = newcap;
+                                } else {
+                                    elen = cap - 1;
+                                }
                             }
                             memcpy(buf, entry, elen);
                             len = elen;
